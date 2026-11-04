@@ -33,10 +33,12 @@ if os.environ.get("LOCAL_AGENT_NUM_GPU"):
 
 # ---------------- 민감정보 마스킹 ----------------
 PATTERNS = [
-    ("주민등록번호", re.compile(r"\b\d{6}\s*-\s*[1-4]\d{6}\b")),
-    ("전화번호", re.compile(r"\b01[016789]\s*-\s*\d{3,4}\s*-\s*\d{4}\b")),
-    ("카드번호", re.compile(r"\b\d{4}\s*-\s*\d{4}\s*-\s*\d{4}\s*-\s*\d{4}\b")),
-    ("계좌번호", re.compile(r"\b\d{3,6}\s*-\s*\d{2,6}\s*-\s*\d{4,6}(?:\s*-\s*\d{1,3})?\b")),
+    # 구분자는 하이픈·공백·없음 모두 허용 (엣지 실측에서 하이픈 전제 패턴의 미탐 확인, 2026-11-04)
+    ("주민등록번호", re.compile(r"\b\d{6}[-\s]?[1-4]\d{6}\b")),
+    ("전화번호", re.compile(r"\b0\d{1,2}[-\s]\d{3,4}[-\s]\d{4}\b")),
+    ("전화번호", re.compile(r"\b1[5-8]\d{2}[-\s]\d{4}\b")),
+    ("카드번호", re.compile(r"\b\d{4}[-\s]\d{4}[-\s]\d{4}[-\s]\d{4}\b")),
+    ("계좌번호", re.compile(r"\b\d{3,6}[-\s]\d{2,6}[-\s]\d{4,6}(?:[-\s]\d{1,3})?\b")),
     ("이메일", re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.]+\b")),
 ]
 LABEL_NAME = re.compile(r"(성명|이름|고객명|예금주)\s*[:：]\s*([가-힣]{2,4})")
@@ -46,10 +48,11 @@ def mask_text(text):
     """민감 패턴을 찾아 마스킹한다. (마스킹된 텍스트, 발견 목록) 반환."""
     found = []
     out = text
-    m = LABEL_NAME.search(out)
-    if m:
+    for m in LABEL_NAME.finditer(out):
         found.append(("성명", m.group(2)))
-        out = out.replace(m.group(2), m.group(2)[0] + "*" * (len(m.group(2)) - 1))
+    for m in LABEL_NAME.finditer(text):
+        name = m.group(2)
+        out = out.replace(name, name[0] + "*" * (len(name) - 1))
     for label, pat in PATTERNS:
         for hit in pat.findall(out):
             found.append((label, hit))
@@ -88,10 +91,14 @@ def load_chunks():
     return chunks
 
 
+RETRIEVE_THRESHOLD = 0.10  # 실측 근거: 문서 내 질문 최소 0.243 / 문서 밖 질문 최대 0.058 (2026-11-04)
+
+
 def retrieve(chunks, query, topk=3):
     qv = ngrams(query)
-    scored = sorted(chunks, key=lambda c: cosine(qv, c["vec"]), reverse=True)
-    return [c for c in scored if cosine(qv, c["vec"]) > 0.02][:topk]
+    scored = [(cosine(qv, c["vec"]), c) for c in chunks]
+    scored.sort(key=lambda t: t[0], reverse=True)
+    return [c for s, c in scored if s > RETRIEVE_THRESHOLD][:topk]
 
 
 # ---------------- Ollama 호출 (localhost 전용) ----------------
@@ -100,8 +107,11 @@ def chat(messages):
                        "options": CHAT_OPTIONS}).encode("utf-8")
     req = urllib.request.Request(OLLAMA + "/api/chat", data=body,
                                  headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=300) as r:
-        return json.loads(r.read().decode("utf-8"))["message"]["content"]
+    try:
+        with urllib.request.urlopen(req, timeout=300) as r:
+            return json.loads(r.read().decode("utf-8"))["message"]["content"]
+    except urllib.error.URLError:
+        raise RuntimeError("Ollama 로컬 서버에 연결할 수 없습니다. 서버 실행 여부를 확인하세요.") from None
 
 
 SYSTEM = (
@@ -128,7 +138,8 @@ def summarize_memo(raw):
     print("\n[마스킹 결과]")
     print(masked)
     if found:
-        print("[탐지된 민감정보]", ", ".join(f"{k}:{v}" for k, v in found))
+        counts = Counter(k for k, _ in found)
+        print("[탐지된 민감정보]", ", ".join(f"{k} {n}건" for k, n in counts.items()))
     msgs = [
         {"role": "system", "content": "당신은 창구 상담 메모를 정리하는 비서입니다. 마스킹된 기호는 그대로 두세요."},
         {"role": "user", "content": f"다음 상담 메모를 세 줄로 요약해 주세요.\n\n{masked}"},
@@ -151,7 +162,10 @@ def main():
                         break
                     lines.append(line)
                 if lines:
-                    summarize_memo("\n".join(lines))
+                    try:
+                        summarize_memo("\n".join(lines))
+                    except RuntimeError as e:
+                        print(e)
             except (KeyboardInterrupt, EOFError):
                 break
         return
@@ -168,7 +182,11 @@ def main():
         masked_q, found = mask_text(q)
         if found:
             print(f"(질문에서 민감정보 {len(found)}건을 마스킹했습니다)")
-        ans, sources = answer(chunks, masked_q)
+        try:
+            ans, sources = answer(chunks, masked_q)
+        except RuntimeError as e:
+            print(e)
+            continue
         print("\n답변:", ans)
         if sources:
             print("근거:", ", ".join(sorted(set(sources))))
