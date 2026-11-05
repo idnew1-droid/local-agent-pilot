@@ -27,6 +27,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DOCS_DIR = os.path.join(BASE_DIR, "docs")
 OLLAMA = "http://localhost:11434"
 MODEL = os.environ.get("LOCAL_AGENT_MODEL", "exaone3.5:7.8b")
+# 마지막 사용 후 이 시간이 지나면 모델이 메모리(VRAM)에서 내려간다. 상시 점유 방지.
+KEEP_ALIVE = os.environ.get("LOCAL_AGENT_KEEP_ALIVE", "2m")
 CHAT_OPTIONS = {"num_ctx": 4096}
 if os.environ.get("LOCAL_AGENT_NUM_GPU"):
     CHAT_OPTIONS["num_gpu"] = int(os.environ["LOCAL_AGENT_NUM_GPU"])
@@ -104,6 +106,7 @@ def retrieve(chunks, query, topk=3):
 # ---------------- Ollama 호출 (localhost 전용) ----------------
 def chat(messages):
     body = json.dumps({"model": MODEL, "messages": messages, "stream": False,
+                       "keep_alive": KEEP_ALIVE,
                        "options": CHAT_OPTIONS}).encode("utf-8")
     req = urllib.request.Request(OLLAMA + "/api/chat", data=body,
                                  headers={"Content-Type": "application/json"})

@@ -57,6 +57,7 @@ def use_model(model):
 def chat_stream(messages):
     """Ollama 스트리밍 호출. (조각 텍스트)들을 흘리고 마지막에 실측 지표를 붙인다."""
     body = json.dumps({"model": agent.MODEL, "messages": messages, "stream": True,
+                       "keep_alive": agent.KEEP_ALIVE,
                        "options": agent.CHAT_OPTIONS}).encode("utf-8")
     req = urllib.request.Request(agent.OLLAMA + "/api/chat", data=body,
                                  headers={"Content-Type": "application/json"})
