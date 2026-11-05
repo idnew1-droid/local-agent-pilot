@@ -3,195 +3,328 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>로컬 업무 비서 — 이 PC 안에서만 동작하는 AI 도우미</title>
+<title>로컬 업무 비서</title>
 <style>
+  /* Achromatic ledger — 크롬에는 색을 쓰지 않는다. 색은 데이터(근거·가린 건수)에만. */
   :root{
-    --ink:#17293d; --sub:#5b7186; --line:#dce5ee; --bg:#f3f6f9; --card:#ffffff;
-    --navy:#1d4e79; --navy-dark:#163d5f; --teal:#0e7c66; --teal-bg:#e6f4f0;
-    --warn:#9a6a12; --warn-bg:#fdf3dd; --err:#b3372f; --err-bg:#fdecea;
-    --radius:14px;
+    --ground:#f2f4f7; --surface:#ffffff; --raised:#eef1f4;
+    --border:#e1e6ec; --rule:#edf0f3; --control:#cfd6dd;
+    --text:#131a22; --muted:#68727d; --accent:#14181d;
+    --positive:#2e7d32; --negative:#c4242a; --hue:#1d5fbf;
+    --radius-card:8px; --radius-control:6px; --gap:12px;
   }
   *{box-sizing:border-box}
-  html{font-size:16px}
-  body.large{font-size:19px}
-  body{margin:0;background:var(--bg);color:var(--ink);
+  body{margin:0;background:var(--ground);color:var(--text);
     font-family:"Pretendard","Malgun Gothic","Apple SD Gothic Neo",sans-serif;
-    line-height:1.55;-webkit-font-smoothing:antialiased}
+    font-size:14px;line-height:1.6;-webkit-font-smoothing:antialiased}
+  body.lg{font-size:16px} body.xl{font-size:18px}
   button,input,select,textarea{font:inherit;color:inherit}
-  :focus-visible{outline:3px solid #9cc3e5;outline-offset:2px;border-radius:6px}
+  :focus-visible{outline:2px solid var(--hue);outline-offset:2px;border-radius:4px}
+  .num{font-variant-numeric:tabular-nums}
 
-  header{background:linear-gradient(135deg,var(--navy-dark),var(--navy));color:#fff}
-  .header-in{max-width:1180px;margin:0 auto;padding:20px 24px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
-  .logo{width:44px;height:44px;border-radius:12px;background:rgba(255,255,255,.14);
-    display:flex;align-items:center;justify-content:center;flex:none}
-  .logo svg{width:26px;height:26px;stroke:#fff}
-  header h1{font-size:1.3rem;margin:0;font-weight:700;letter-spacing:-.02em}
-  header p{margin:2px 0 0;color:#c8dcee;font-size:.88rem}
-  .badge{margin-left:auto;display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.12);
-    border:1px solid rgba(255,255,255,.25);padding:8px 14px;border-radius:999px;font-size:.85rem}
-  .dot{width:10px;height:10px;border-radius:50%;background:#f0b429;flex:none}
-  .dot.on{background:#3ddc97}.dot.off{background:#ff7a72}
+  .layout{display:grid;grid-template-columns:256px 1fr;min-height:100vh}
+  @media (max-width:900px){.layout{grid-template-columns:1fr}}
 
-  .wrap{max-width:1180px;margin:0 auto;padding:22px 24px 40px;display:grid;
-    grid-template-columns:290px 1fr;gap:20px;align-items:start}
-  @media (max-width:860px){.wrap{grid-template-columns:1fr}}
+  /* ---------- 사이드바 (open plane: 지면 위에 그대로) ---------- */
+  aside{padding:22px 16px;border-right:1px solid var(--border);display:flex;flex-direction:column;gap:26px}
+  @media (max-width:900px){aside{border-right:0;border-bottom:1px solid var(--border)}}
+  .brand{display:flex;gap:11px;align-items:flex-start}
+  .mark{flex:none;margin-top:2px}
+  .brand h1{font-size:16px;font-weight:700;margin:0;letter-spacing:-.01em}
+  .brand p{margin:1px 0 0;color:var(--muted);font-size:12px}
+  .status{display:flex;align-items:center;gap:8px;font-size:13px;margin-top:10px}
+  .dot{width:8px;height:8px;border-radius:50%;background:#b6bec7;flex:none}
+  .dot.on{background:var(--positive)}
+  .status button{margin-left:auto;background:none;border:0;color:var(--muted);cursor:pointer;
+    font-size:12px;padding:4px 6px;border-radius:var(--radius-control)}
+  .status button:hover{background:var(--raised);color:var(--text)}
 
-  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px;margin-bottom:16px}
-  .card h2{font-size:.95rem;margin:0 0 12px;display:flex;align-items:center;gap:8px;font-weight:700}
-  .card h2 svg{width:18px;height:18px;stroke:var(--navy)}
-  .kv{display:flex;justify-content:space-between;padding:5px 0;font-size:.9rem}
-  .kv span:first-child{color:var(--sub)}
-  .kv b{font-weight:600}
-  .hint{font-size:.83rem;color:var(--sub);margin:8px 0 0}
-  .doc{display:flex;justify-content:space-between;align-items:center;padding:7px 10px;
-    background:var(--bg);border-radius:9px;margin-bottom:6px;font-size:.88rem}
-  .doc small{color:var(--sub)}
-  select{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:#fff;margin-bottom:8px}
+  nav{display:flex;flex-direction:column;gap:2px}
+  .nav-item{display:flex;align-items:center;gap:10px;height:34px;padding:0 12px;border:0;background:none;
+    border-radius:var(--radius-control);cursor:pointer;text-align:left;font-size:14px;color:var(--text)}
+  .nav-item svg{width:16px;height:16px;stroke:var(--muted);flex:none}
+  .nav-item:hover{background:#e9edf1}
+  .nav-item[aria-selected="true"]{background:#e4e9ee;font-weight:600}
+  .nav-item[aria-selected="true"] svg{stroke:var(--text)}
 
-  .btn{display:inline-flex;align-items:center;gap:7px;border:0;cursor:pointer;border-radius:10px;
-    padding:10px 18px;font-weight:600;background:var(--navy);color:#fff}
-  .btn:hover{background:var(--navy-dark)}
-  .btn:disabled{opacity:.55;cursor:wait}
-  .btn.ghost{background:#fff;color:var(--navy);border:1px solid var(--navy)}
-  .btn.ghost:hover{background:#eef4fa}
-  .btn svg{width:17px;height:17px;stroke:currentColor}
-  .btn.small{padding:7px 12px;font-size:.88rem}
-  .filebtn{position:relative;overflow:hidden}
-  .filebtn input{position:absolute;inset:0;opacity:0;cursor:pointer}
+  .group-label{font-size:12.5px;color:var(--muted);margin:0 4px 8px}
+  .doc-row{width:100%;display:flex;justify-content:space-between;align-items:baseline;gap:8px;
+    background:none;border:0;padding:6px 8px;border-radius:var(--radius-control);cursor:pointer;text-align:left}
+  .doc-row:hover{background:#e9edf1}
+  .doc-row .nm{font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .doc-row .ct{font-size:12px;color:var(--muted);flex:none}
+  .doc-preview{display:none;padding:4px 8px 10px}
+  .doc-preview.open{display:block}
+  .doc-preview p{font-size:12.5px;color:var(--muted);background:var(--surface);border:1px solid var(--rule);
+    border-radius:var(--radius-control);padding:8px 10px;margin:0 0 6px;white-space:pre-wrap}
+  .text-btn{display:inline-flex;align-items:center;gap:6px;background:none;border:0;cursor:pointer;
+    color:var(--text);font-size:13px;padding:6px 8px;border-radius:var(--radius-control)}
+  .text-btn:hover{background:#e9edf1}
+  .text-btn svg{width:14px;height:14px;stroke:currentColor}
+  .text-btn input{display:none}
+  .recent-item{display:block;width:100%;background:none;border:0;text-align:left;cursor:pointer;
+    font-size:13px;color:var(--muted);padding:6px 8px;border-radius:var(--radius-control);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .recent-item:hover{background:#e9edf1;color:var(--text)}
+  .side-foot{margin-top:auto;font-size:12px;color:var(--muted);padding:0 4px}
 
-  .tabs{display:flex;gap:8px;margin-bottom:16px}
-  .tab{border:1px solid var(--line);background:#fff;padding:10px 20px;border-radius:999px;cursor:pointer;font-weight:600}
-  .tab[aria-selected="true"]{background:var(--navy);color:#fff;border-color:var(--navy)}
+  /* ---------- 본문 ---------- */
+  main{padding:26px 32px 48px;max-width:1060px;width:100%;margin:0 auto}
+  @media (max-width:900px){main{padding:20px 16px 40px}}
+  .title-row{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:6px}
+  .title-row h2{font-size:24px;font-weight:700;margin:0;letter-spacing:-.02em}
+  .title-row .scope{margin-left:auto;font-size:12.5px;color:var(--muted)}
+  .finding{color:var(--muted);font-size:14px;margin:0 0 20px}
+  .finding b{color:var(--text);font-weight:600}
 
-  .lead{color:var(--sub);font-size:.92rem;margin:0 0 14px}
-  .thread{display:flex;flex-direction:column;gap:14px;min-height:120px}
-  .msg-q{align-self:flex-end;background:var(--navy);color:#fff;padding:11px 16px;
-    border-radius:16px 16px 4px 16px;max-width:82%;white-space:pre-wrap}
-  .msg-a{align-self:flex-start;background:#fff;border:1px solid var(--line);padding:14px 18px;
-    border-radius:16px 16px 16px 4px;max-width:92%;white-space:pre-wrap}
-  .msg-a .srcs{margin-top:10px;display:flex;gap:6px;flex-wrap:wrap}
-  .chip{display:inline-flex;align-items:center;gap:5px;background:var(--teal-bg);color:var(--teal);
-    font-size:.8rem;font-weight:600;padding:3px 10px;border-radius:999px}
-  .chip.warn{background:var(--warn-bg);color:var(--warn)}
-  .chip svg{width:13px;height:13px;stroke:currentColor}
-  details.evidence{margin-top:10px;font-size:.86rem;color:var(--sub)}
-  details.evidence summary{cursor:pointer;font-weight:600;color:var(--navy)}
-  details.evidence div{margin-top:6px;padding:9px 12px;background:var(--bg);border-radius:9px;white-space:pre-wrap}
-  .empty{border:1.5px dashed var(--line);border-radius:var(--radius);padding:28px;text-align:center;color:var(--sub);background:#fff}
-  .empty svg{width:34px;height:34px;stroke:#b7c8d8;margin-bottom:6px}
+  .panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-card)}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);margin-bottom:var(--gap)}
+  @media (max-width:700px){.stats{grid-template-columns:repeat(2,1fr)}}
+  .stat{padding:14px 18px}
+  .stat + .stat{border-left:1px solid var(--rule)}
+  @media (max-width:700px){.stat:nth-child(3){border-left:0}.stat:nth-child(n+3){border-top:1px solid var(--rule)}}
+  .stat .lb{font-size:12.5px;color:var(--muted);margin-bottom:2px}
+  .stat .vl{font-size:20px;font-weight:500;letter-spacing:-.01em}
+  .stat .vl.big{font-size:26px}
+  .stat .vl .unit{font-size:13px;color:var(--muted);font-weight:400}
+  .stat .vl.hue{color:var(--hue)}
+  .stat .vl.grey{color:var(--muted)}
 
-  .askrow{display:flex;gap:10px;margin-top:16px}
-  .askrow input{flex:1;padding:12px 16px;border:1px solid var(--line);border-radius:11px;background:#fff}
-  textarea{width:100%;min-height:150px;padding:13px 15px;border:1px solid var(--line);border-radius:11px;resize:vertical;background:#fff}
-  .btnrow{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
-  .result{margin-top:16px;display:none}
-  .result.show{display:block}
-  .result h3{font-size:.92rem;margin:0 0 8px}
-  .result .box{background:var(--bg);border-radius:11px;padding:13px 15px;white-space:pre-wrap;font-size:.94rem}
-  .banner{display:none;border-radius:11px;padding:12px 16px;margin-bottom:14px;font-size:.9rem}
+  .thread{padding:8px 20px}
+  .exchange{padding:16px 0}
+  .exchange + .exchange{border-top:1px solid var(--rule)}
+  .q{background:var(--raised);border-radius:var(--radius-card);padding:11px 14px;white-space:pre-wrap}
+  .a{padding:13px 2px 0;white-space:pre-wrap;word-break:keep-all}
+  .a-foot{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:11px;font-size:12.5px;color:var(--muted)}
+  .a-foot .src{color:var(--hue);font-weight:500}
+  .a-foot .spacer{flex:1}
+  .mini-btn{background:none;border:0;cursor:pointer;color:var(--muted);font-size:12.5px;padding:3px 7px;border-radius:var(--radius-control)}
+  .mini-btn:hover{background:var(--raised);color:var(--text)}
+  .masked-note{font-size:12.5px;color:var(--muted);margin-top:9px}
+  .masked-note b{color:var(--hue);font-weight:600}
+  .evidence{display:none;margin-top:10px}
+  .evidence.open{display:block}
+  .evidence p{background:var(--ground);border-radius:var(--radius-control);padding:10px 12px;
+    font-size:13px;color:#39434e;margin:0 0 6px;white-space:pre-wrap}
+  .cursor{display:inline-block;width:8px;height:15px;background:var(--text);vertical-align:-2px;animation:bl 1s steps(1) infinite}
+  @keyframes bl{50%{opacity:0}}
+  .samples{padding:6px 0}
+  .samples .lb{font-size:12.5px;color:var(--muted);padding:10px 0 2px}
+  .sample{display:block;width:100%;background:none;border:0;border-bottom:1px solid var(--rule);
+    text-align:left;padding:11px 2px;cursor:pointer;font-size:14px}
+  .sample:last-child{border-bottom:0}
+  .sample:hover{color:var(--hue)}
+
+  .composer{display:flex;gap:10px;margin-top:var(--gap)}
+  .composer input{flex:1;height:44px;padding:0 15px;border:1px solid var(--control);
+    border-radius:var(--radius-control);background:var(--surface)}
+  .btn{height:44px;padding:0 22px;border:0;border-radius:var(--radius-control);cursor:pointer;
+    background:var(--accent);color:#fff;font-weight:600}
+  .btn:hover{background:#000}
+  .btn:disabled{opacity:.5;cursor:wait}
+  .btn.secondary{background:#e5e8ec;color:var(--text)}
+  .btn.secondary:hover{background:#d9dee4}
+  .btn.sm{height:36px;padding:0 16px;font-size:13.5px}
+
+  .banner{display:none;border-radius:var(--radius-card);padding:12px 16px;margin-bottom:var(--gap);
+    font-size:13.5px;background:#fdeceb;color:var(--negative);border:1px solid #f5cfcd}
   .banner.show{display:block}
-  .banner.err{background:var(--err-bg);color:var(--err)}
-  .thinking{display:inline-flex;gap:5px;align-items:center;color:var(--sub)}
-  .thinking i{width:7px;height:7px;border-radius:50%;background:var(--navy);animation:bl 1s infinite}
-  .thinking i:nth-child(2){animation-delay:.15s}.thinking i:nth-child(3){animation-delay:.3s}
-  @keyframes bl{0%,100%{opacity:.25}50%{opacity:1}}
-  .switch{display:flex;align-items:center;justify-content:space-between;padding:5px 0;font-size:.9rem}
-  .switch input{width:20px;height:20px;accent-color:var(--navy)}
-  footer{max-width:1180px;margin:0 auto;padding:0 24px 30px;color:var(--sub);font-size:.85rem;
-    display:flex;gap:8px;align-items:center}
-  footer svg{width:16px;height:16px;stroke:var(--teal);flex:none}
+
+  /* 메모 화면 */
+  .memo-in{padding:16px 18px}
+  .memo-in textarea{width:100%;min-height:160px;border:0;resize:vertical;background:transparent;line-height:1.65}
+  .memo-in textarea:focus{outline:none}
+  .memo-bar{display:flex;gap:10px;padding:12px 18px;border-top:1px solid var(--rule);flex-wrap:wrap;align-items:center}
+  .memo-bar .note{font-size:12.5px;color:var(--muted);margin-right:auto}
+  .result{margin-top:var(--gap);padding:18px 20px}
+  .result-head{display:flex;align-items:baseline;gap:12px;margin-bottom:10px}
+  .result-head h3{font-size:16px;font-weight:600;margin:0}
+  .result-head .fig{margin-left:auto;font-size:13px;color:var(--muted)}
+  .result-head .fig b{font-size:17px;color:var(--hue);font-weight:600}
+  .result-head .fig b.grey{color:var(--muted)}
+  .masked-text{white-space:pre-wrap;line-height:1.9;word-break:keep-all}
+  .redact{display:inline-block;background:var(--accent);color:#fff;font-size:11.5px;font-weight:500;
+    border-radius:3px;padding:1px 7px;margin:0 1px;vertical-align:1px;letter-spacing:.01em}
+  .counts{display:flex;gap:16px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--rule);
+    font-size:13px;color:var(--muted)}
+  .counts b{color:var(--text);font-weight:600}
+  .summary-text{white-space:pre-wrap;word-break:keep-all}
+
+  /* 설정 화면 */
+  .set-row{display:grid;grid-template-columns:minmax(220px,450px) 1fr;gap:24px;padding:26px 0}
+  @media (max-width:800px){.set-row{grid-template-columns:1fr}}
+  .set-row + .set-row{border-top:1px solid var(--border)}
+  .set-row h3{font-size:16px;font-weight:500;margin:0 0 6px}
+  .set-row .desc{font-size:14px;color:var(--muted);margin:0}
+  .set-panel{background:#f8fafc;border-radius:var(--radius-card);padding:18px}
+  .set-panel label{display:block;font-size:13.5px;font-weight:500;margin:0 0 7px}
+  .set-panel select{width:100%;height:40px;padding:0 10px;border:1px solid var(--border);
+    border-radius:10px;background:#fff;margin-bottom:14px}
+  .seg{display:inline-flex;background:#e8ecf0;border-radius:999px;padding:3px}
+  .seg button{border:0;background:none;padding:6px 16px;border-radius:999px;cursor:pointer;font-size:13.5px}
+  .seg button[aria-pressed="true"]{background:#fff;font-weight:600}
+  .kv{display:flex;justify-content:space-between;padding:6px 0;font-size:13.5px}
+  .kv span:first-child{color:var(--muted)}
 </style>
 </head>
 <body>
-<header>
-  <div class="header-in">
-    <div class="logo" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-3.6 8-10V5l-8-3-8 3v7c0 6.4 8 10 8 10z"/><path d="m9 11.5 2 2 4-4.5"/></svg></div>
-    <div>
-      <h1>로컬 업무 비서</h1>
-      <p>업무 문서를 근거로 답하고, 상담 메모의 개인정보를 가려 정리합니다</p>
-    </div>
-    <div class="badge"><span class="dot" id="statusDot"></span><span id="statusText">연결 확인 중…</span></div>
-  </div>
-</header>
-
-<div class="wrap">
+<div class="layout">
   <aside>
-    <section class="card" aria-label="상태">
-      <h2><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>이 PC의 상태</h2>
-      <div class="kv"><span>AI 엔진</span><b id="stEngine">확인 중</b></div>
-      <div class="kv"><span>사용 모델</span><b id="stModel">-</b></div>
-      <div class="kv"><span>읽은 문서</span><b id="stDocs">-</b></div>
-      <div class="kv"><span>인터넷 연결</span><b>필요 없음</b></div>
-      <p class="hint">모든 처리는 이 컴퓨터 안에서만 이뤄집니다. 입력한 내용은 밖으로 나가지 않습니다.</p>
-    </section>
+    <div>
+      <div class="brand">
+        <svg class="mark" width="30" height="30" viewBox="0 0 30 30" aria-hidden="true">
+          <rect x="1" y="4" width="19" height="5" rx="1.5" fill="#14181d"/>
+          <rect x="1" y="12.5" width="26" height="5" rx="1.5" fill="#14181d"/>
+          <rect x="1" y="21" width="14" height="5" rx="1.5" fill="#1d5fbf"/>
+        </svg>
+        <div>
+          <h1>로컬 업무 비서</h1>
+          <p>이 PC 전용 · 외부 연결 없음</p>
+        </div>
+      </div>
+      <div class="status">
+        <span class="dot" id="statusDot"></span><span id="statusText">연결 확인 중</span>
+        <button id="refreshBtn" type="button">새로고침</button>
+      </div>
+    </div>
 
-    <section class="card" aria-label="업무 문서">
-      <h2><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 13h6M9 17h6"/></svg>업무 문서</h2>
+    <nav aria-label="화면 전환">
+      <button class="nav-item" id="navAsk" aria-selected="true" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+        문서에게 묻기</button>
+      <button class="nav-item" id="navMemo" aria-selected="false" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+        상담 메모 정리</button>
+      <button class="nav-item" id="navSet" aria-selected="false" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        설정</button>
+    </nav>
+
+    <section aria-label="업무 문서">
+      <p class="group-label">업무 문서</p>
       <div id="docList"></div>
-      <label class="btn ghost small filebtn">
+      <label class="text-btn">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         문서 추가<input type="file" id="fileInput" accept=".txt,.md">
       </label>
-      <p class="hint">규정·절차 문서를 넣으면 그 내용을 근거로 답합니다. txt, md 파일만 가능합니다.</p>
     </section>
 
-    <section class="card" aria-label="설정">
-      <h2><svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>설정</h2>
-      <label for="modelSel" class="hint" style="margin:0 0 6px;display:block">답변 모델 (정확한 답은 큰 모델, 빠른 요약은 작은 모델)</label>
-      <select id="modelSel"></select>
-      <button class="btn ghost small" id="modelApply" type="button">모델 적용</button>
-      <div class="switch"><span>글자 크게 보기</span><input type="checkbox" id="fontToggle" aria-label="글자 크게 보기"></div>
+    <section aria-label="최근 질문" id="recentSec" hidden>
+      <p class="group-label">최근 질문</p>
+      <div id="recentList"></div>
     </section>
+
+    <p class="side-foot">입력한 내용은 이 컴퓨터 밖으로<br>나가지 않습니다.</p>
   </aside>
 
   <main>
-    <div class="banner err" id="errBanner" role="alert"></div>
-    <div class="tabs" role="tablist">
-      <button class="tab" role="tab" id="tabAsk" aria-selected="true" type="button">문서에게 묻기</button>
-      <button class="tab" role="tab" id="tabMemo" aria-selected="false" type="button">상담 메모 정리</button>
-    </div>
+    <div class="banner" id="errBanner" role="alert"></div>
 
-    <section id="paneAsk" role="tabpanel" aria-labelledby="tabAsk">
-      <p class="lead">업무 문서에 있는 내용만 근거로 답합니다. 문서에 없는 내용은 지어내지 않고, 없다고 알려 드립니다. 질문에 개인정보가 섞여 있으면 보내기 전에 자동으로 가립니다.</p>
-      <div class="thread" id="thread">
-        <div class="empty" id="askEmpty">
-          <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
-          <div>궁금한 규정을 물어보세요.<br>예: 보이스피싱이 의심되는 이체 요청을 받으면 어떻게 해야 하나요?</div>
+    <!-- 묻기 -->
+    <section id="viewAsk">
+      <div class="title-row"><h2>문서에게 묻기</h2><span class="scope num" id="scopeLine"></span></div>
+      <p class="finding">업무 문서에 있는 내용만 근거로 답합니다. 문서에 없으면 없다고 말합니다.</p>
+
+      <div class="panel stats" role="group" aria-label="상태 요약">
+        <div class="stat"><div class="lb">AI 엔진</div><div class="vl" id="stEngine">확인 중</div></div>
+        <div class="stat"><div class="lb">답변 모델</div><div class="vl" id="stModel" style="font-size:15px;padding-top:5px">-</div></div>
+        <div class="stat"><div class="lb">근거 문서</div><div class="vl big num" id="stChunks">-</div></div>
+        <div class="stat"><div class="lb">이번 실행에서 가린 개인정보</div><div class="vl big num" id="stMasked">-</div></div>
+      </div>
+
+      <div class="panel thread" id="thread">
+        <div class="samples" id="samples">
+          <div class="lb">문서에서 답을 찾을 수 있는 질문</div>
+          <button class="sample" type="button">보이스피싱이 의심되는 이체 요청을 받으면 어떻게 해야 하나요?</button>
+          <button class="sample" type="button">고액 현금거래는 얼마부터 보고 대상인가요?</button>
+          <button class="sample" type="button">계좌 비밀번호를 여러 번 틀린 고객은 어떻게 안내하나요?</button>
         </div>
       </div>
-      <form class="askrow" id="askForm">
-        <input id="askInput" type="text" placeholder="질문을 입력하세요" autocomplete="off" aria-label="질문 입력">
+
+      <form class="composer" id="askForm">
+        <input id="askInput" type="text" placeholder="규정이나 절차를 물어보세요" autocomplete="off" aria-label="질문 입력">
         <button class="btn" id="askBtn" type="submit">묻기</button>
       </form>
     </section>
 
-    <section id="paneMemo" role="tabpanel" aria-labelledby="tabMemo" hidden>
-      <p class="lead">상담 메모를 붙여 넣으면 주민번호·계좌번호·전화번호 같은 개인정보를 먼저 가린 뒤에 보여 드립니다. 요약도 가려진 내용으로만 만듭니다.</p>
-      <label for="memoInput" class="hint" style="display:block;margin-bottom:6px">상담 메모 원본 (이 칸의 내용은 이 PC 밖으로 나가지 않습니다)</label>
-      <textarea id="memoInput" placeholder="상담 메모를 붙여 넣어 주세요"></textarea>
-      <div class="btnrow">
-        <button class="btn ghost" id="maskBtn" type="button">개인정보만 가리기</button>
-        <button class="btn" id="sumBtn" type="button">가리고 요약하기</button>
+    <!-- 메모 -->
+    <section id="viewMemo" hidden>
+      <div class="title-row"><h2>상담 메모 정리</h2></div>
+      <p class="finding">붙여 넣은 메모에서 개인정보를 먼저 가립니다. 요약은 가려진 내용으로만 만듭니다.</p>
+
+      <div class="panel">
+        <div class="memo-in">
+          <textarea id="memoInput" placeholder="상담 메모를 붙여 넣어 주세요. 주민번호, 계좌번호, 전화번호 같은 정보는 자동으로 가려집니다." aria-label="상담 메모 원본"></textarea>
+        </div>
+        <div class="memo-bar">
+          <span class="note">원본은 이 PC 밖으로 나가지 않습니다</span>
+          <button class="btn secondary sm" id="maskBtn" type="button">개인정보만 가리기</button>
+          <button class="btn sm" id="sumBtn" type="button">가리고 요약하기</button>
+        </div>
       </div>
-      <div class="result" id="maskResult">
-        <h3>가려진 메모 <span id="maskCounts"></span></h3>
-        <div class="box" id="maskBox"></div>
+
+      <div class="panel result" id="maskResult" hidden>
+        <div class="result-head"><h3>가려진 메모</h3>
+          <span class="fig">총 <b class="num" id="maskTotal">0</b>건 가림</span>
+          <button class="mini-btn" id="copyMask" type="button">복사</button></div>
+        <div class="masked-text" id="maskBox"></div>
+        <div class="counts" id="maskCounts"></div>
       </div>
-      <div class="result" id="sumResult">
-        <h3>요약</h3>
-        <div class="box" id="sumBox"></div>
+
+      <div class="panel result" id="sumResult" hidden>
+        <div class="result-head"><h3>요약</h3>
+          <button class="mini-btn" id="copySum" type="button" style="margin-left:auto">복사</button></div>
+        <div class="summary-text" id="sumBox"></div>
+      </div>
+    </section>
+
+    <!-- 설정 -->
+    <section id="viewSet" hidden>
+      <div class="title-row"><h2>설정</h2></div>
+      <p class="finding">설정은 이 PC에만 적용됩니다.</p>
+
+      <div class="set-row">
+        <div><h3>모델</h3>
+          <p class="desc">질문 답변은 정확도가 높은 큰 모델이, 메모 요약은 빠른 작은 모델이 맞습니다. 바꾼 뒤 적용을 누르세요.</p></div>
+        <div class="set-panel">
+          <label for="qaModelSel">질문 답변 모델</label>
+          <select id="qaModelSel"></select>
+          <label for="memoModelSel">메모 요약 모델</label>
+          <select id="memoModelSel"></select>
+          <button class="btn sm" id="modelApply" type="button">적용</button>
+        </div>
+      </div>
+
+      <div class="set-row">
+        <div><h3>글자 크기</h3>
+          <p class="desc">화면 글자를 키웁니다. 창구에서 멀리서 봐야 할 때 크게 두세요.</p></div>
+        <div class="set-panel">
+          <div class="seg" role="group" aria-label="글자 크기">
+            <button type="button" data-fs="" aria-pressed="true">보통</button>
+            <button type="button" data-fs="lg" aria-pressed="false">크게</button>
+            <button type="button" data-fs="xl" aria-pressed="false">더 크게</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="set-row">
+        <div><h3>엔진 정보</h3>
+          <p class="desc">이 도구가 쓰는 로컬 엔진의 상태입니다. 속도가 느리면 작은 모델로 바꾸는 것이 먼저입니다.</p></div>
+        <div class="set-panel">
+          <div class="kv"><span>엔진 (Ollama)</span><b id="setEngine">-</b></div>
+          <div class="kv"><span>GPU 적재 층 수</span><b class="num" id="setGpu">-</b></div>
+          <div class="kv"><span>설치된 모델</span><b class="num" id="setModels">-</b></div>
+          <div class="kv"><span>이번 실행에서 답한 질문</span><b class="num" id="setAsks">-</b></div>
+          <div class="kv"><span>이번 실행에서 정리한 메모</span><b class="num" id="setMemos">-</b></div>
+        </div>
       </div>
     </section>
   </main>
 </div>
 
-<footer>
-  <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-  <span>이 도구는 인터넷 없이 동작합니다. 비행기 모드에서도, 외부망이 차단된 사무실에서도 그대로 쓸 수 있습니다.</span>
-</footer>
-
 <script>
 const $ = id => document.getElementById(id);
+const esc = s => s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const api = async (path, body) => {
   const opt = body ? {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)} : {};
   const r = await fetch(path, opt);
@@ -199,53 +332,147 @@ const api = async (path, body) => {
   if (!r.ok) throw new Error(data.error || "요청에 실패했습니다");
   return data;
 };
-const showErr = msg => { const b = $("errBanner"); b.textContent = msg; b.classList.add("show"); };
+const showErr = m => { const b = $("errBanner"); b.textContent = m; b.classList.add("show"); };
 const hideErr = () => $("errBanner").classList.remove("show");
+let lastStatus = null;
 
 async function refreshStatus(){
   try{
-    const s = await api("/api/status");
-    $("statusDot").className = "dot " + (s.ollama ? "on" : "off");
-    $("statusText").textContent = s.ollama ? "이 PC 안에서 동작 중" : "AI 엔진이 꺼져 있습니다";
+    const s = await api("/api/status"); lastStatus = s;
+    $("statusDot").className = "dot" + (s.ollama ? " on" : "");
+    $("statusText").textContent = s.ollama ? "AI 엔진 연결됨" : "AI 엔진 꺼짐";
     $("stEngine").textContent = s.ollama ? "연결됨" : "꺼짐";
-    $("stModel").textContent = s.model;
-    $("stDocs").textContent = s.doc_files + "개 파일 · " + s.doc_chunks + "단락";
-    const sel = $("modelSel");
-    if (sel.options.length === 0){
-      (s.models.length ? s.models : [s.model]).forEach(m => {
-        const o = document.createElement("option"); o.value = m; o.textContent = m; sel.appendChild(o);
-      });
-      sel.value = s.model;
-    }
-    if (!s.ollama) showErr("AI 엔진(Ollama)이 실행되고 있지 않습니다. 시작 메뉴에서 Ollama를 실행하거나, '실행.bat'으로 다시 시작해 주세요.");
+    $("stModel").textContent = s.qa_model;
+    $("stChunks").innerHTML = s.doc_chunks + ' <span class="unit">단락</span>';
+    const m = $("stMasked");
+    m.innerHTML = s.counters.masked_items + ' <span class="unit">건</span>';
+    m.className = "vl big num" + (s.counters.masked_items > 0 ? " hue" : " grey");
+    $("scopeLine").textContent = "문서 " + s.doc_files + "개 · " + s.doc_chunks + "단락 기준";
+    $("setEngine").textContent = s.ollama ? "연결됨" : "꺼짐";
+    $("setGpu").textContent = s.num_gpu ? s.num_gpu + "층" : "기본값";
+    $("setModels").textContent = s.models.length + "개";
+    $("setAsks").textContent = s.counters.asks + "건";
+    $("setMemos").textContent = s.counters.memos + "건";
+    const fill = (id, val) => { const sel = $(id);
+      if (!sel.options.length){ (s.models.length ? s.models : [val]).forEach(mn => {
+        const o = document.createElement("option"); o.value = mn; o.textContent = mn; sel.appendChild(o); }); }
+      sel.value = val; };
+    fill("qaModelSel", s.qa_model); fill("memoModelSel", s.memo_model);
+    if (!s.ollama) showErr("AI 엔진(Ollama)이 실행되고 있지 않습니다. 시작 메뉴에서 Ollama를 실행하거나, 실행.bat으로 다시 시작해 주세요.");
     else hideErr();
-    const dl = await api("/api/docs");
-    const list = $("docList"); list.textContent = "";
-    dl.docs.forEach(d => {
-      const div = document.createElement("div"); div.className = "doc";
-      const n = document.createElement("span"); n.textContent = d.name;
-      const c = document.createElement("small"); c.textContent = d.paras + "단락";
-      div.append(n, c); list.appendChild(div);
-    });
-    if (!dl.docs.length) list.innerHTML = '<p class="hint">아직 문서가 없습니다. 문서를 추가해 주세요.</p>';
+    renderDocs();
   }catch(e){ $("statusText").textContent = "서버 연결 실패"; }
 }
-refreshStatus(); setInterval(refreshStatus, 15000);
 
-// 탭 전환
-const tabs = [["tabAsk","paneAsk"],["tabMemo","paneMemo"]];
-tabs.forEach(([t,p]) => $(t).addEventListener("click", () => {
-  tabs.forEach(([t2,p2]) => { $(t2).setAttribute("aria-selected", t2===t ? "true":"false"); $(p2).hidden = p2!==p; });
+async function renderDocs(){
+  const dl = await api("/api/docs").catch(() => ({docs:[]}));
+  const list = $("docList"); list.textContent = "";
+  dl.docs.forEach(d => {
+    const row = document.createElement("button"); row.className = "doc-row"; row.type = "button";
+    const nm = document.createElement("span"); nm.className = "nm"; nm.textContent = d.name;
+    const ct = document.createElement("span"); ct.className = "ct num"; ct.textContent = d.paras + "단락";
+    row.append(nm, ct);
+    const pv = document.createElement("div"); pv.className = "doc-preview";
+    row.addEventListener("click", async () => {
+      if (pv.classList.contains("open")){ pv.classList.remove("open"); return; }
+      const data = await api("/api/docs/preview?name=" + encodeURIComponent(d.name)).catch(() => null);
+      pv.textContent = "";
+      (data?.paras || []).forEach(t => { const p = document.createElement("p"); p.textContent = t; pv.appendChild(p); });
+      pv.classList.add("open");
+    });
+    list.append(row, pv);
+  });
+  if (!dl.docs.length) list.innerHTML = '<p class="hint" style="font-size:12.5px;color:var(--muted);padding:0 8px">아직 문서가 없습니다.</p>';
+}
+
+// 화면 전환
+const views = [["navAsk","viewAsk"],["navMemo","viewMemo"],["navSet","viewSet"]];
+views.forEach(([n,v]) => $(n).addEventListener("click", () => {
+  views.forEach(([n2,v2]) => { $(n2).setAttribute("aria-selected", n2===n ? "true":"false"); $(v2).hidden = v2!==v; });
+  if (v === "viewSet") refreshStatus();
 }));
+$("refreshBtn").addEventListener("click", refreshStatus);
 
-// 글자 크기
-$("fontToggle").addEventListener("change", e => document.body.classList.toggle("large", e.target.checked));
+// 최근 질문 (이 브라우저에만 저장)
+const RECENT_KEY = "localdesk_recent";
+const getRecent = () => { try{ return JSON.parse(localStorage.getItem(RECENT_KEY)) || []; }catch{ return []; } };
+function renderRecent(){
+  const items = getRecent();
+  $("recentSec").hidden = !items.length;
+  const list = $("recentList"); list.textContent = "";
+  items.forEach(q => { const b = document.createElement("button"); b.className = "recent-item"; b.type = "button";
+    b.textContent = q; b.addEventListener("click", () => { $("askInput").value = q; $("askForm").requestSubmit(); });
+    list.appendChild(b); });
+}
+function pushRecent(q){
+  const items = [q, ...getRecent().filter(x => x !== q)].slice(0, 5);
+  localStorage.setItem(RECENT_KEY, JSON.stringify(items)); renderRecent();
+}
 
-// 모델 적용
-$("modelApply").addEventListener("click", async () => {
-  try{ await api("/api/model", {model: $("modelSel").value}); refreshStatus(); }
-  catch(e){ showErr(e.message); }
+// 질의응답 (스트리밍)
+$("askForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const q = $("askInput").value.trim(); if (!q) return;
+  $("samples")?.remove(); $("askInput").value = ""; pushRecent(q);
+  const thread = $("thread");
+  const ex = document.createElement("div"); ex.className = "exchange";
+  const qb = document.createElement("div"); qb.className = "q"; qb.textContent = q;
+  const ab = document.createElement("div"); ab.className = "a";
+  const body = document.createElement("span"); ab.appendChild(body);
+  const cur = document.createElement("span"); cur.className = "cursor"; ab.appendChild(cur);
+  ex.append(qb, ab); thread.appendChild(ex); ex.scrollIntoView({behavior:"smooth", block:"nearest"});
+  $("askBtn").disabled = true;
+  let meta = null, stats = null, errMsg = null;
+  try{
+    const r = await fetch("/api/ask_stream", {method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({question: q})});
+    const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = "";
+    while (true){
+      const {done, value} = await reader.read(); if (done) break;
+      buf += dec.decode(value, {stream:true});
+      let i;
+      while ((i = buf.indexOf("\n")) >= 0){
+        const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+        if (!line) continue;
+        const ev = JSON.parse(line);
+        if (ev.type === "meta"){ meta = ev; if (ev.found === false) body.textContent = ev.answer; }
+        else if (ev.type === "delta"){ body.textContent += ev.text; }
+        else if (ev.type === "stats"){ stats = ev; }
+        else if (ev.type === "error"){ errMsg = ev.message; }
+      }
+    }
+  }catch(err){ errMsg = err.message; }
+  cur.remove(); $("askBtn").disabled = false; $("askInput").focus();
+  if (errMsg){ body.textContent = body.textContent || errMsg; showErr(errMsg); }
+  if (meta){
+    if (meta.masked_count > 0){
+      const note = document.createElement("div"); note.className = "masked-note";
+      note.innerHTML = "질문에서 개인정보 <b>" + meta.masked_count + "건</b>을 가리고 물었습니다";
+      ex.appendChild(note);
+    }
+    if (meta.found){
+      const foot = document.createElement("div"); foot.className = "a-foot";
+      const src = document.createElement("span"); src.className = "src";
+      src.textContent = "근거 · " + meta.sources.join(", "); foot.appendChild(src);
+      const info = document.createElement("span");
+      if (stats?.tok_per_sec) info.textContent = stats.tok_per_sec + " tok/s";
+      foot.appendChild(info);
+      const sp = document.createElement("span"); sp.className = "spacer"; foot.appendChild(sp);
+      const evBtn = document.createElement("button"); evBtn.className = "mini-btn"; evBtn.type = "button"; evBtn.textContent = "근거 원문";
+      const cpBtn = document.createElement("button"); cpBtn.className = "mini-btn"; cpBtn.type = "button"; cpBtn.textContent = "답변 복사";
+      foot.append(evBtn, cpBtn); ex.appendChild(foot);
+      const evBox = document.createElement("div"); evBox.className = "evidence";
+      (meta.evidence || []).forEach(t => { const p = document.createElement("p"); p.textContent = t; evBox.appendChild(p); });
+      ex.appendChild(evBox);
+      evBtn.addEventListener("click", () => evBox.classList.toggle("open"));
+      cpBtn.addEventListener("click", () => navigator.clipboard.writeText(body.textContent));
+    }
+  }
+  refreshStatus();
 });
+document.querySelectorAll(".sample").forEach(b => b.addEventListener("click", () => {
+  $("askInput").value = b.textContent; $("askForm").requestSubmit();
+}));
 
 // 문서 추가
 $("fileInput").addEventListener("change", async e => {
@@ -256,65 +483,57 @@ $("fileInput").addEventListener("change", async e => {
   e.target.value = "";
 });
 
-// 질의응답
-$("askForm").addEventListener("submit", async e => {
-  e.preventDefault();
-  const q = $("askInput").value.trim(); if (!q) return;
-  $("askEmpty")?.remove();
-  const thread = $("thread");
-  const qb = document.createElement("div"); qb.className = "msg-q"; qb.textContent = q; thread.appendChild(qb);
-  $("askInput").value = "";
-  const ab = document.createElement("div"); ab.className = "msg-a";
-  ab.innerHTML = '<span class="thinking">근거를 찾는 중 <i></i><i></i><i></i></span>';
-  thread.appendChild(ab); ab.scrollIntoView({behavior:"smooth", block:"nearest"});
-  $("askBtn").disabled = true;
-  try{
-    const r = await api("/api/ask", {question: q});
-    ab.textContent = "";
-    const body = document.createElement("div"); body.textContent = r.answer; ab.appendChild(body);
-    const meta = document.createElement("div"); meta.className = "srcs";
-    if (r.masked_count > 0){
-      const c = document.createElement("span"); c.className = "chip warn"; c.textContent = "질문의 개인정보 " + r.masked_count + "건을 가리고 물었습니다"; meta.appendChild(c);
-    }
-    (r.sources || []).forEach(s => {
-      const c = document.createElement("span"); c.className = "chip"; c.textContent = "근거: " + s; meta.appendChild(c);
-    });
-    if (meta.children.length) ab.appendChild(meta);
-    if (r.evidence && r.evidence.length){
-      const d = document.createElement("details"); d.className = "evidence";
-      const sm = document.createElement("summary"); sm.textContent = "근거 원문 보기"; d.appendChild(sm);
-      r.evidence.forEach(t => { const dv = document.createElement("div"); dv.textContent = t; d.appendChild(dv); });
-      ab.appendChild(d);
-    }
-  }catch(err){
-    ab.textContent = ""; const body = document.createElement("div");
-    body.textContent = err.message; ab.appendChild(body); showErr(err.message);
-  }
-  $("askBtn").disabled = false; $("askInput").focus();
-});
-
-// 메모 마스킹·요약
+// 메모
+function renderMasked(text){
+  let h = esc(text);
+  h = h.replace(/\[([^\]]+?) 마스킹\]/g, '<span class="redact">$1</span>');
+  h = h.replace(/([가-힣])\*{1,3}/g, '<span class="redact">$1**</span>');
+  return h;
+}
+let lastMasked = "", lastSummary = "";
 async function runMemo(summarize){
   const text = $("memoInput").value;
   if (!text.trim()){ showErr("메모를 먼저 입력해 주세요."); return; }
   hideErr();
-  const btn = summarize ? $("sumBtn") : $("maskBtn");
-  btn.disabled = true;
+  const btn = summarize ? $("sumBtn") : $("maskBtn"); btn.disabled = true;
   try{
     const r = await api(summarize ? "/api/summarize" : "/api/mask", {text});
-    $("maskBox").textContent = r.masked;
+    lastMasked = r.masked;
+    $("maskBox").innerHTML = renderMasked(r.masked);
     const counts = Object.entries(r.counts || {});
-    $("maskCounts").textContent = counts.length ? "— " + counts.map(([k,v]) => k + " " + v + "건").join(", ") + " 가림" : "— 가릴 정보 없음";
-    $("maskResult").classList.add("show");
-    if (summarize){
-      $("sumBox").textContent = r.summary;
-      $("sumResult").classList.add("show");
-    }
+    const total = counts.reduce((a, [,v]) => a + v, 0);
+    const mt = $("maskTotal"); mt.textContent = total; mt.className = "num" + (total ? "" : " grey");
+    const mc = $("maskCounts"); mc.textContent = "";
+    counts.forEach(([k, v]) => { const s = document.createElement("span");
+      s.innerHTML = esc(k) + " <b class='num'>" + v + "건</b>"; mc.appendChild(s); });
+    if (!counts.length) mc.textContent = "가릴 개인정보가 없습니다.";
+    $("maskResult").hidden = false;
+    if (summarize){ lastSummary = r.summary; $("sumBox").textContent = r.summary; $("sumResult").hidden = false; }
+    refreshStatus();
   }catch(err){ showErr(err.message); }
   btn.disabled = false;
 }
 $("maskBtn").addEventListener("click", () => runMemo(false));
 $("sumBtn").addEventListener("click", () => runMemo(true));
+$("copyMask").addEventListener("click", () => navigator.clipboard.writeText(lastMasked));
+$("copySum").addEventListener("click", () => navigator.clipboard.writeText(lastSummary));
+
+// 설정
+$("modelApply").addEventListener("click", async () => {
+  try{ await api("/api/model", {qa_model: $("qaModelSel").value, memo_model: $("memoModelSel").value}); refreshStatus(); }
+  catch(e){ showErr(e.message); }
+});
+document.querySelectorAll(".seg button").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll(".seg button").forEach(x => x.setAttribute("aria-pressed", "false"));
+  b.setAttribute("aria-pressed", "true");
+  document.body.className = b.dataset.fs;
+  localStorage.setItem("localdesk_fs", b.dataset.fs);
+}));
+(function(){ const fs = localStorage.getItem("localdesk_fs");
+  if (fs){ document.body.className = fs;
+    document.querySelectorAll(".seg button").forEach(x => x.setAttribute("aria-pressed", x.dataset.fs === fs ? "true" : "false")); } })();
+
+refreshStatus(); renderRecent(); setInterval(refreshStatus, 20000);
 </script>
 </body>
 </html>

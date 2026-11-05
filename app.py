@@ -10,12 +10,13 @@ Python 표준 라이브러리만으로 동작하므로 폐쇄망 PC에 그대로
   python app.py            서버 시작 후 브라우저가 자동으로 열린다
 환경변수
   LOCALDESK_PORT           포트 (기본 8765, 사용 중이면 다음 포트 탐색)
-  LOCAL_AGENT_MODEL       기본 모델 (agent.py와 동일)
-  LOCAL_AGENT_NUM_GPU     GPU 적재 층 수 (agent.py와 동일)
+  LOCAL_AGENT_MODEL       기본 모델 (질문·요약 공통 초기값)
+  LOCAL_AGENT_NUM_GPU     GPU 적재 층 수
 """
 import json
 import os
 import threading
+import time
 import urllib.request
 import webbrowser
 from collections import Counter
@@ -28,9 +29,12 @@ UI_FILE = os.path.join(BASE_DIR, "ui.html")
 
 STATE = {
     "chunks": agent.load_chunks(),
-    "model": agent.MODEL,
+    "qa_model": agent.MODEL,
+    "memo_model": os.environ.get("LOCALDESK_MEMO_MODEL", "exaone3.5:2.4b"),
     "num_gpu": agent.CHAT_OPTIONS.get("num_gpu"),
-    "lock": threading.Lock(),
+    "counters": {"asks": 0, "memos": 0, "masked_items": 0},
+    "lock": threading.Lock(),       # 색인 교체용
+    "chat_lock": threading.Lock(),  # 모델 전환이 섞이지 않게 호출 직렬화
 }
 
 
@@ -44,12 +48,34 @@ def ollama_status():
         return False, []
 
 
-def apply_model():
-    agent.MODEL = STATE["model"]
+def use_model(model):
+    agent.MODEL = model
     if STATE["num_gpu"]:
         agent.CHAT_OPTIONS["num_gpu"] = STATE["num_gpu"]
-    else:
-        agent.CHAT_OPTIONS.pop("num_gpu", None)
+
+
+def chat_stream(messages):
+    """Ollama 스트리밍 호출. (조각 텍스트)들을 흘리고 마지막에 실측 지표를 붙인다."""
+    body = json.dumps({"model": agent.MODEL, "messages": messages, "stream": True,
+                       "options": agent.CHAT_OPTIONS}).encode("utf-8")
+    req = urllib.request.Request(agent.OLLAMA + "/api/chat", data=body,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=600) as r:
+            for line in r:
+                if not line.strip():
+                    continue
+                obj = json.loads(line.decode("utf-8"))
+                piece = obj.get("message", {}).get("content", "")
+                if piece:
+                    yield {"type": "delta", "text": piece}
+                if obj.get("done"):
+                    dur = obj.get("eval_duration") or 0
+                    cnt = obj.get("eval_count") or 0
+                    yield {"type": "stats", "eval_count": cnt,
+                           "tok_per_sec": round(cnt / (dur / 1e9), 1) if dur else None}
+    except urllib.error.URLError:
+        raise RuntimeError("Ollama 로컬 서버에 연결할 수 없습니다. 서버 실행 여부를 확인하세요.") from None
 
 
 def summarize(masked_text):
@@ -57,7 +83,9 @@ def summarize(masked_text):
         {"role": "system", "content": "당신은 창구 상담 메모를 정리하는 비서입니다. 마스킹된 기호는 그대로 두세요."},
         {"role": "user", "content": f"다음 상담 메모를 세 줄로 요약해 주세요.\n\n{masked_text}"},
     ]
-    return agent.chat(msgs)
+    with STATE["chat_lock"]:
+        use_model(STATE["memo_model"])
+        return agent.chat(msgs)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -77,8 +105,13 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length", 0))
         return json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
 
-    def counts_of(self, found):
+    @staticmethod
+    def counts_of(found):
         return dict(Counter(k for k, _ in found))
+
+    def doc_summary(self):
+        docs = Counter(c["source"] for c in STATE["chunks"])
+        return docs
 
     # ---------- routes ----------
     def do_GET(self):
@@ -92,40 +125,43 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         elif self.path == "/api/status":
             ok, models = ollama_status()
-            docs = Counter(c["source"] for c in STATE["chunks"])
+            docs = self.doc_summary()
             self.send_json({
-                "ollama": ok, "models": models, "model": STATE["model"],
+                "ollama": ok, "models": models,
+                "qa_model": STATE["qa_model"], "memo_model": STATE["memo_model"],
                 "num_gpu": STATE["num_gpu"],
                 "doc_files": len(docs), "doc_chunks": len(STATE["chunks"]),
+                "counters": STATE["counters"],
             })
         elif self.path == "/api/docs":
-            docs = Counter(c["source"] for c in STATE["chunks"])
+            docs = self.doc_summary()
             self.send_json({"docs": [{"name": k, "paras": v} for k, v in sorted(docs.items())]})
+        elif self.path.startswith("/api/docs/preview"):
+            from urllib.parse import urlparse, parse_qs, unquote
+            name = unquote(parse_qs(urlparse(self.path).query).get("name", [""])[0])
+            paras = [c["text"] for c in STATE["chunks"] if c["source"] == name]
+            self.send_json({"name": name, "paras": paras})
         else:
             self.send_json({"error": "not found"}, 404)
 
     def do_POST(self):
         try:
             data = self.read_json()
-            if self.path == "/api/ask":
-                self.handle_ask(data)
+            if self.path == "/api/ask_stream":
+                self.handle_ask_stream(data)
             elif self.path == "/api/mask":
                 masked, found = agent.mask_text(data.get("text", ""))
                 self.send_json({"masked": masked, "counts": self.counts_of(found)})
             elif self.path == "/api/summarize":
-                masked, found = agent.mask_text(data.get("text", ""))
-                if not masked.strip():
-                    self.send_json({"error": "메모를 입력해 주세요."}, 400)
-                    return
-                self.send_json({"masked": masked, "counts": self.counts_of(found),
-                                "summary": summarize(masked)})
+                self.handle_summarize(data)
             elif self.path == "/api/docs/upload":
                 self.handle_upload(data)
             elif self.path == "/api/model":
-                STATE["model"] = data.get("model", STATE["model"])
-                STATE["num_gpu"] = data.get("num_gpu") or None
-                apply_model()
-                self.send_json({"model": STATE["model"], "num_gpu": STATE["num_gpu"]})
+                if data.get("qa_model"):
+                    STATE["qa_model"] = data["qa_model"]
+                if data.get("memo_model"):
+                    STATE["memo_model"] = data["memo_model"]
+                self.send_json({"qa_model": STATE["qa_model"], "memo_model": STATE["memo_model"]})
             else:
                 self.send_json({"error": "not found"}, 404)
         except RuntimeError as e:  # Ollama 미연결 등 사용자에게 보여줄 오류
@@ -133,27 +169,60 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:  # 그 외 오류도 traceback 대신 메시지로
             self.send_json({"error": f"처리 중 오류가 발생했습니다: {e}"}, 500)
 
-    def handle_ask(self, data):
+    def handle_ask_stream(self, data):
         q = (data.get("question") or "").strip()
         if not q:
             self.send_json({"error": "질문을 입력해 주세요."}, 400)
             return
         masked_q, found = agent.mask_text(q)
+        STATE["counters"]["masked_items"] += len(found)
         with STATE["lock"]:
             hits = agent.retrieve(STATE["chunks"], masked_q)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
+        def emit(obj):
+            self.wfile.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
+            self.wfile.flush()
+
+        meta = {"type": "meta", "masked_count": len(found)}
         if not hits:
-            self.send_json({"found": False, "masked_count": len(found),
-                            "answer": "문서에서 관련 근거를 찾지 못했습니다. 문서에 없는 내용은 지어내지 않습니다."})
+            meta.update({"found": False,
+                         "answer": "문서에서 관련 근거를 찾지 못했습니다. 문서에 없는 내용은 지어내지 않습니다."})
+            emit(meta)
+            emit({"type": "done", "elapsed_s": 0})
             return
+        meta.update({"found": True,
+                     "sources": sorted({h["source"] for h in hits}),
+                     "evidence": [h["text"] for h in hits]})
+        emit(meta)
         context = "\n\n".join(f"[근거:{h['source']}] {h['text']}" for h in hits)
         msgs = [
             {"role": "system", "content": agent.SYSTEM},
             {"role": "user", "content": f"{context}\n\n질문: {masked_q}"},
         ]
-        self.send_json({"found": True, "masked_count": len(found),
-                        "answer": agent.chat(msgs),
-                        "sources": sorted({h["source"] for h in hits}),
-                        "evidence": [h["text"] for h in hits]})
+        started = time.time()
+        try:
+            with STATE["chat_lock"]:
+                use_model(STATE["qa_model"])
+                for event in chat_stream(msgs):
+                    emit(event)
+            STATE["counters"]["asks"] += 1
+            emit({"type": "done", "elapsed_s": round(time.time() - started, 1)})
+        except RuntimeError as e:
+            emit({"type": "error", "message": str(e)})
+
+    def handle_summarize(self, data):
+        masked, found = agent.mask_text(data.get("text", ""))
+        if not masked.strip():
+            self.send_json({"error": "메모를 입력해 주세요."}, 400)
+            return
+        STATE["counters"]["masked_items"] += len(found)
+        summary = summarize(masked)
+        STATE["counters"]["memos"] += 1
+        self.send_json({"masked": masked, "counts": self.counts_of(found), "summary": summary})
 
     def handle_upload(self, data):
         name = os.path.basename((data.get("name") or "").strip())
@@ -170,7 +239,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    apply_model()
+    use_model(STATE["qa_model"])
     port = int(os.environ.get("LOCALDESK_PORT", "8765"))
     server = None
     for cand in range(port, port + 10):
@@ -185,7 +254,7 @@ def main():
         return
     url = f"http://127.0.0.1:{port}"
     print(f"로컬 업무 비서 실행 중: {url}  (종료: Ctrl+C)")
-    print(f"모델: {STATE['model']} | 색인 문서 단락: {len(STATE['chunks'])}개 | 외부 연결: 없음")
+    print(f"질문 모델: {STATE['qa_model']} | 요약 모델: {STATE['memo_model']} | 색인 문서 단락: {len(STATE['chunks'])}개 | 외부 연결: 없음")
     threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:
         server.serve_forever()
