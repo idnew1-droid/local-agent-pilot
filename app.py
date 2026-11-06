@@ -20,6 +20,7 @@ import time
 import urllib.request
 import webbrowser
 from collections import Counter
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import agent  # 같은 폴더의 코어 로직 (마스킹·검색·Ollama 호출)
@@ -36,6 +37,44 @@ STATE = {
     "lock": threading.Lock(),       # 색인 교체용
     "chat_lock": threading.Lock(),  # 모델 전환이 섞이지 않게 호출 직렬화
 }
+
+
+LOG_FILE = os.path.join(BASE_DIR, "usage_log.jsonl")
+
+
+def append_log(entry):
+    """사용 기록: 질문·메모 같은 내용은 남기지 않고 종류와 건수만 남긴다."""
+    try:
+        row = {"ts": datetime.now().isoformat(timespec="seconds"), **entry}
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def log_today():
+    """오늘 날짜의 기록만 모아 건수를 센다 (재실행해도 남는 누적)."""
+    today = datetime.now().date().isoformat()
+    agg = {"asks": 0, "memos": 0, "masked_items": 0}
+    try:
+        with open(LOG_FILE, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if not str(e.get("ts", "")).startswith(today):
+                    continue
+                if e.get("type") == "ask":
+                    agg["asks"] += 1
+                elif e.get("type") == "summarize":
+                    agg["memos"] += 1
+                    agg["masked_items"] += sum((e.get("counts") or {}).values())
+                elif e.get("type") == "mask":
+                    agg["masked_items"] += sum((e.get("counts") or {}).values())
+    except OSError:
+        pass
+    return agg
 
 
 def ollama_status():
@@ -132,7 +171,7 @@ class Handler(BaseHTTPRequestHandler):
                 "qa_model": STATE["qa_model"], "memo_model": STATE["memo_model"],
                 "num_gpu": STATE["num_gpu"],
                 "doc_files": len(docs), "doc_chunks": len(STATE["chunks"]),
-                "counters": STATE["counters"],
+                "counters": STATE["counters"], "today": log_today(),
             })
         elif self.path == "/api/docs":
             docs = self.doc_summary()
@@ -152,7 +191,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.handle_ask_stream(data)
             elif self.path == "/api/mask":
                 masked, found = agent.mask_text(data.get("text", ""))
-                self.send_json({"masked": masked, "counts": self.counts_of(found)})
+                counts = self.counts_of(found)
+                append_log({"type": "mask", "counts": counts})
+                self.send_json({"masked": masked, "counts": counts})
+            elif self.path == "/api/reload":
+                with STATE["lock"]:
+                    STATE["chunks"] = agent.load_chunks()
+                docs = self.doc_summary()
+                self.send_json({"ok": True, "doc_files": len(docs),
+                                "doc_chunks": len(STATE["chunks"])})
             elif self.path == "/api/summarize":
                 self.handle_summarize(data)
             elif self.path == "/api/docs/upload":
@@ -193,6 +240,8 @@ class Handler(BaseHTTPRequestHandler):
             meta.update({"found": False,
                          "answer": "문서에서 관련 근거를 찾지 못했습니다. 문서에 없는 내용은 지어내지 않습니다."})
             emit(meta)
+            append_log({"type": "ask", "found": False, "model": STATE["qa_model"],
+                        "masked_count": len(found)})
             emit({"type": "done", "elapsed_s": 0})
             return
         meta.update({"found": True,
@@ -211,6 +260,8 @@ class Handler(BaseHTTPRequestHandler):
                 for event in chat_stream(msgs):
                     emit(event)
             STATE["counters"]["asks"] += 1
+            append_log({"type": "ask", "found": True, "model": STATE["qa_model"],
+                        "masked_count": len(found)})
             emit({"type": "done", "elapsed_s": round(time.time() - started, 1)})
         except RuntimeError as e:
             emit({"type": "error", "message": str(e)})
@@ -223,7 +274,9 @@ class Handler(BaseHTTPRequestHandler):
         STATE["counters"]["masked_items"] += len(found)
         summary = summarize(masked)
         STATE["counters"]["memos"] += 1
-        self.send_json({"masked": masked, "counts": self.counts_of(found), "summary": summary})
+        counts = self.counts_of(found)
+        append_log({"type": "summarize", "model": STATE["memo_model"], "counts": counts})
+        self.send_json({"masked": masked, "counts": counts, "summary": summary})
 
     def handle_upload(self, data):
         name = os.path.basename((data.get("name") or "").strip())

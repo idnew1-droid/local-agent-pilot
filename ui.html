@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>로컬 업무 비서</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3E%3Crect x='1' y='4' width='19' height='5' rx='1.5' fill='%2314181d'/%3E%3Crect x='1' y='12.5' width='26' height='5' rx='1.5' fill='%2314181d'/%3E%3Crect x='1' y='21' width='14' height='5' rx='1.5' fill='%231d5fbf'/%3E%3C/svg%3E">
 <style>
   /* Achromatic ledger — 크롬에는 색을 쓰지 않는다. 색은 데이터(근거·가린 건수)에만. */
   :root{
@@ -165,6 +166,23 @@
   .seg button[aria-pressed="true"]{background:#fff;font-weight:600}
   .kv{display:flex;justify-content:space-between;padding:6px 0;font-size:13.5px}
   .kv span:first-child{color:var(--muted)}
+
+  ::selection{background:#d7e4f5}
+  @media (prefers-reduced-motion: reduce){
+    .cursor{animation:none}
+    *{scroll-behavior:auto !important}
+  }
+  /* 인쇄: 답변·요약만 종이에 남긴다 */
+  @media print{
+    aside,.composer,.banner,.mini-btn,.text-btn{display:none !important}
+    body{background:#fff}
+    .layout{display:block}
+    main{max-width:none;padding:0}
+    .panel{border:0}
+    body.printing .stats{display:none}
+    body.printing .exchange,body.printing .result{display:none !important}
+    body.printing .print-target{display:block !important}
+  }
 </style>
 </head>
 <body>
@@ -207,6 +225,9 @@
         <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
         문서 추가<input type="file" id="fileInput" accept=".txt,.md">
       </label>
+      <button class="text-btn" id="reloadBtn" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+        문서 다시 읽기</button>
     </section>
 
     <section aria-label="최근 질문" id="recentSec" hidden>
@@ -258,6 +279,7 @@
         </div>
         <div class="memo-bar">
           <span class="note">원본은 이 PC 밖으로 나가지 않습니다</span>
+          <span class="note num" id="memoCount"></span>
           <button class="btn secondary sm" id="maskBtn" type="button">개인정보만 가리기</button>
           <button class="btn sm" id="sumBtn" type="button">가리고 요약하기</button>
         </div>
@@ -273,7 +295,8 @@
 
       <div class="panel result" id="sumResult" hidden>
         <div class="result-head"><h3>요약</h3>
-          <button class="mini-btn" id="copySum" type="button" style="margin-left:auto">복사</button></div>
+          <button class="mini-btn" id="printSum" type="button" style="margin-left:auto">인쇄</button>
+          <button class="mini-btn" id="copySum" type="button">복사</button></div>
         <div class="summary-text" id="sumBox"></div>
       </div>
     </section>
@@ -309,13 +332,15 @@
 
       <div class="set-row">
         <div><h3>엔진 정보</h3>
-          <p class="desc">이 도구가 쓰는 로컬 엔진의 상태입니다. 속도가 느리면 작은 모델로 바꾸는 것이 먼저입니다.</p></div>
+          <p class="desc">이 도구가 쓰는 로컬 엔진의 상태입니다. 처리 기록은 질문이나 메모의 내용을 남기지 않고 건수만 usage_log.jsonl에 쌓습니다.</p></div>
         <div class="set-panel">
           <div class="kv"><span>엔진 (Ollama)</span><b id="setEngine">-</b></div>
           <div class="kv"><span>GPU 적재 층 수</span><b class="num" id="setGpu">-</b></div>
           <div class="kv"><span>설치된 모델</span><b class="num" id="setModels">-</b></div>
           <div class="kv"><span>이번 실행에서 답한 질문</span><b class="num" id="setAsks">-</b></div>
           <div class="kv"><span>이번 실행에서 정리한 메모</span><b class="num" id="setMemos">-</b></div>
+          <div class="kv"><span>오늘 답한 질문 (기록 기준)</span><b class="num" id="setTodayAsks">-</b></div>
+          <div class="kv"><span>오늘 정리한 메모 (기록 기준)</span><b class="num" id="setTodayMemos">-</b></div>
         </div>
       </div>
     </section>
@@ -353,6 +378,8 @@ async function refreshStatus(){
     $("setModels").textContent = s.models.length + "개";
     $("setAsks").textContent = s.counters.asks + "건";
     $("setMemos").textContent = s.counters.memos + "건";
+    $("setTodayAsks").textContent = (s.today?.asks ?? 0) + "건";
+    $("setTodayMemos").textContent = (s.today?.memos ?? 0) + "건";
     const fill = (id, val) => { const sel = $(id);
       if (!sel.options.length){ (s.models.length ? s.models : [val]).forEach(mn => {
         const o = document.createElement("option"); o.value = mn; o.textContent = mn; sel.appendChild(o); }); }
@@ -460,7 +487,9 @@ $("askForm").addEventListener("submit", async e => {
       const sp = document.createElement("span"); sp.className = "spacer"; foot.appendChild(sp);
       const evBtn = document.createElement("button"); evBtn.className = "mini-btn"; evBtn.type = "button"; evBtn.textContent = "근거 원문";
       const cpBtn = document.createElement("button"); cpBtn.className = "mini-btn"; cpBtn.type = "button"; cpBtn.textContent = "답변 복사";
-      foot.append(evBtn, cpBtn); ex.appendChild(foot);
+      const prBtn = document.createElement("button"); prBtn.className = "mini-btn"; prBtn.type = "button"; prBtn.textContent = "인쇄";
+      foot.append(evBtn, cpBtn, prBtn); ex.appendChild(foot);
+      prBtn.addEventListener("click", () => printOnly([ex]));
       const evBox = document.createElement("div"); evBox.className = "evidence";
       (meta.evidence || []).forEach(t => { const p = document.createElement("p"); p.textContent = t; evBox.appendChild(p); });
       ex.appendChild(evBox);
@@ -473,6 +502,31 @@ $("askForm").addEventListener("submit", async e => {
 document.querySelectorAll(".sample").forEach(b => b.addEventListener("click", () => {
   $("askInput").value = b.textContent; $("askForm").requestSubmit();
 }));
+
+// 인쇄: 지정한 결과만 종이에 남긴다
+function printOnly(els){
+  els.forEach(el => el && el.classList.add("print-target"));
+  document.body.classList.add("printing");
+  const clean = () => { document.body.classList.remove("printing");
+    els.forEach(el => el && el.classList.remove("print-target"));
+    window.removeEventListener("afterprint", clean); };
+  window.addEventListener("afterprint", clean);
+  setTimeout(clean, 60000);
+  window.print();
+}
+$("printSum").addEventListener("click", () => printOnly([$("maskResult"), $("sumResult")]));
+
+// 문서 다시 읽기 (폴더에 직접 넣은 파일 반영)
+$("reloadBtn").addEventListener("click", async () => {
+  try{ await api("/api/reload", {}); refreshStatus(); }
+  catch(err){ showErr(err.message); }
+});
+
+// 메모 글자 수
+$("memoInput").addEventListener("input", e => {
+  const n = e.target.value.length;
+  $("memoCount").textContent = n ? n.toLocaleString() + "자" : "";
+});
 
 // 문서 추가
 $("fileInput").addEventListener("change", async e => {
