@@ -46,8 +46,25 @@ PATTERNS = [
 LABEL_NAME = re.compile(r"(성명|이름|고객명|예금주)\s*[:：]\s*([가-힣]{2,4})")
 
 
-def mask_text(text):
-    """민감 패턴을 찾아 마스킹한다. (마스킹된 텍스트, 발견 목록) 반환."""
+def _partial(label, hit):
+    """일부 표시: 실무 관행대로 식별에 필요한 최소만 남긴다."""
+    d = re.sub(r"\D", "", hit)
+    if label == "주민등록번호" and len(d) >= 6:
+        return d[:6] + "-*******"  # 생년월일만 (은행 앱 관행)
+    if label == "이메일":
+        local, _, domain = hit.partition("@")
+        if domain:
+            return local[:2] + "***@" + domain
+    if label in ("전화번호", "카드번호", "계좌번호") and len(d) >= 4:
+        return f"[{label} 마스킹 ··{d[-4:]}]"  # 끝 4자리만
+    return f"[{label} 마스킹]"
+
+
+def mask_text(text, level="full"):
+    """민감 패턴을 찾아 마스킹한다. (마스킹된 텍스트, 발견 목록) 반환.
+
+    level="full"은 전부 가림, "partial"은 끝 4자리·생년월일처럼 일부만 남긴다.
+    """
     found = []
     out = text
     for m in LABEL_NAME.finditer(out):
@@ -58,7 +75,10 @@ def mask_text(text):
     for label, pat in PATTERNS:
         for hit in pat.findall(out):
             found.append((label, hit))
-        out = pat.sub(f"[{label} 마스킹]", out)
+        if level == "partial":
+            out = pat.sub(lambda m, lb=label: _partial(lb, m.group(0)), out)
+        else:
+            out = pat.sub(f"[{label} 마스킹]", out)
     return out, found
 
 
@@ -101,6 +121,33 @@ def retrieve(chunks, query, topk=3):
     scored = [(cosine(qv, c["vec"]), c) for c in chunks]
     scored.sort(key=lambda t: t[0], reverse=True)
     return [c for s, c in scored if s > RETRIEVE_THRESHOLD][:topk]
+
+
+# ---------------- 의미 검색 (임베딩, 선택 기능) ----------------
+EMBED_MODEL = os.environ.get("LOCAL_AGENT_EMBED_MODEL", "bge-m3")
+# 실측으로 정한다: 문서 내 질문의 최소 점수와 문서 밖 질문의 최대 점수 사이.
+# (PC 실측 2026-11-07에서 확정 — measure_embed.py)
+EMBED_THRESHOLD = 0.50
+
+
+def embed(texts):
+    """Ollama 임베딩. 모델이 없거나 실패하면 None (호출부가 단어 검색으로 폴백)."""
+    body = json.dumps({"model": EMBED_MODEL, "input": texts}).encode("utf-8")
+    req = urllib.request.Request(OLLAMA + "/api/embed", data=body,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=180) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        return data.get("embeddings")
+    except Exception:
+        return None
+
+
+def vec_cosine(a, b):
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    return dot / (na * nb) if na and nb else 0.0
 
 
 # ---------------- Ollama 호출 (localhost 전용) ----------------

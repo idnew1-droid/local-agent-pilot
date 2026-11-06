@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>로컬 업무 비서</title>
+<script>try{ if (localStorage.getItem("localdesk_theme") === "dark") document.documentElement.dataset.theme = "dark"; }catch(e){}</script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3E%3Crect x='1' y='4' width='19' height='5' rx='1.5' fill='%2314181d'/%3E%3Crect x='1' y='12.5' width='26' height='5' rx='1.5' fill='%2314181d'/%3E%3Crect x='1' y='21' width='14' height='5' rx='1.5' fill='%231d5fbf'/%3E%3C/svg%3E">
 <style>
   /* Achromatic ledger — 크롬에는 색을 쓰지 않는다. 색은 데이터(근거·가린 건수)에만. */
@@ -168,6 +169,44 @@
   .kv span:first-child{color:var(--muted)}
 
   ::selection{background:#d7e4f5}
+  .banner.warn{background:#fdf3e0;color:#7a4b00;border-color:#eed9a8}
+  .todo{display:flex;align-items:center;gap:10px;padding:9px 2px;border-bottom:1px solid var(--rule)}
+  .todo:last-child{border-bottom:0}
+  .todo input{width:17px;height:17px;accent-color:var(--hue);flex:none}
+  .todo .tx{flex:1}
+  .todo.done .tx{color:var(--muted);text-decoration:line-through}
+  .rec-row{display:flex;justify-content:space-between;gap:14px;padding:8px 2px;border-bottom:1px solid var(--rule);font-size:13.5px}
+  .rec-row:last-child{border-bottom:0}
+  .rec-row .d{color:var(--muted);flex:none}
+  .set-panel input[type="text"],.set-panel input[type="password"]{width:100%;height:40px;padding:0 10px;
+    border:1px solid var(--border);border-radius:var(--radius-control);background:var(--surface);margin-bottom:14px}
+
+  /* 다크 모드: 같은 장부, 어두운 지면 */
+  [data-theme="dark"]{
+    --ground:#11161c; --surface:#1a212a; --raised:#232c36;
+    --border:#2c3641; --rule:#242e38; --control:#3d4956;
+    --text:#e9edf1; --muted:#95a2ae; --accent:#eef1f4;
+    --positive:#58b368; --negative:#e5685e; --hue:#5f97e8;
+  }
+  [data-theme="dark"] .btn{color:#14181d}
+  [data-theme="dark"] .btn:hover{background:#ffffff}
+  [data-theme="dark"] .btn.secondary{background:#2a343f;color:var(--text)}
+  [data-theme="dark"] .nav-item:hover,[data-theme="dark"] .doc-row:hover,
+  [data-theme="dark"] .text-btn:hover,[data-theme="dark"] .recent-item:hover,
+  [data-theme="dark"] .mini-btn:hover,[data-theme="dark"] .status button:hover{background:#242e38}
+  [data-theme="dark"] .nav-item[aria-selected="true"]{background:#28323d}
+  [data-theme="dark"] .seg{background:#242e38}
+  [data-theme="dark"] .seg button[aria-pressed="true"]{background:#39434e;color:var(--text)}
+  [data-theme="dark"] .set-panel{background:#161d24}
+  [data-theme="dark"] .set-panel select{background:var(--surface);color:var(--text)}
+  [data-theme="dark"] .banner{background:#3a2321;border-color:#5f3733}
+  [data-theme="dark"] .banner.warn{background:#2e2a12;color:#e8c97a;border-color:#574d1f}
+  [data-theme="dark"] .evidence p{color:#c3ccd4}
+  [data-theme="dark"] .redact{background:#05080b}
+  [data-theme="dark"] ::selection{background:#2c4a73}
+  [data-theme="dark"] .mark rect{fill:#e9edf1}
+  [data-theme="dark"] .mark rect:last-child{fill:#5f97e8}
+
   @media (prefers-reduced-motion: reduce){
     .cursor{animation:none}
     *{scroll-behavior:auto !important}
@@ -213,6 +252,9 @@
       <button class="nav-item" id="navMemo" aria-selected="false" type="button">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
         상담 메모 정리</button>
+      <button class="nav-item" id="navLog" aria-selected="false" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+        업무 기록</button>
       <button class="nav-item" id="navSet" aria-selected="false" type="button">
         <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         설정</button>
@@ -240,6 +282,7 @@
 
   <main>
     <div class="banner" id="errBanner" role="alert"></div>
+    <div class="banner warn" id="extBanner" role="alert"></div>
 
     <!-- 묻기 -->
     <section id="viewAsk">
@@ -301,6 +344,38 @@
       </div>
     </section>
 
+    <!-- 업무 기록 -->
+    <section id="viewLog" hidden>
+      <div class="title-row"><h2>업무 기록</h2>
+        <span class="scope">
+          <button class="mini-btn" id="dayPrev" type="button">이전 날</button>
+          <b id="logDate" class="num"></b>
+          <button class="mini-btn" id="dayNext" type="button">다음 날</button>
+          <button class="mini-btn" id="dayToday" type="button">오늘</button>
+        </span></div>
+      <p class="finding">그날 처리한 건수와 할 일을 함께 봅니다. 처리 기록에는 질문이나 메모의 내용을 남기지 않습니다.</p>
+
+      <div class="panel stats" role="group" aria-label="그날 처리 건수" style="grid-template-columns:repeat(3,1fr)">
+        <div class="stat"><div class="lb">답한 질문</div><div class="vl big num" id="lgAsks">-</div></div>
+        <div class="stat"><div class="lb">정리한 메모</div><div class="vl big num" id="lgMemos">-</div></div>
+        <div class="stat"><div class="lb">가린 개인정보</div><div class="vl big num" id="lgMasked">-</div></div>
+      </div>
+
+      <div class="panel" style="padding:18px 20px;margin-bottom:var(--gap)">
+        <div class="result-head"><h3>할 일</h3></div>
+        <div id="todoList"></div>
+        <form class="composer" id="todoForm" style="margin-top:12px">
+          <input id="todoInput" type="text" placeholder="할 일을 적고 Enter" autocomplete="off" aria-label="할 일 입력">
+          <button class="btn secondary" type="submit">추가</button>
+        </form>
+      </div>
+
+      <div class="panel result">
+        <div class="result-head"><h3>최근 7일 처리 기록</h3></div>
+        <div id="recordsBox"></div>
+      </div>
+    </section>
+
     <!-- 설정 -->
     <section id="viewSet" hidden>
       <div class="title-row"><h2>설정</h2></div>
@@ -319,13 +394,35 @@
       </div>
 
       <div class="set-row">
+        <div><h3>마스킹 강도</h3>
+          <p class="desc">전부 가림이 기본입니다. 일부 표시는 전화·계좌·카드의 끝 4자리와 주민번호의 생년월일만 남깁니다. 확인이 필요한 실무에서는 편하지만, 남는 만큼 노출도 커집니다.</p></div>
+        <div class="set-panel">
+          <div class="seg" id="maskSeg" role="group" aria-label="마스킹 강도">
+            <button type="button" data-ml="full" aria-pressed="true">전부 가림</button>
+            <button type="button" data-ml="partial" aria-pressed="false">일부 표시</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="set-row">
         <div><h3>글자 크기</h3>
           <p class="desc">화면 글자를 키웁니다. 창구에서 멀리서 봐야 할 때 크게 두세요.</p></div>
         <div class="set-panel">
-          <div class="seg" role="group" aria-label="글자 크기">
+          <div class="seg" id="fsSeg" role="group" aria-label="글자 크기">
             <button type="button" data-fs="" aria-pressed="true">보통</button>
             <button type="button" data-fs="lg" aria-pressed="false">크게</button>
             <button type="button" data-fs="xl" aria-pressed="false">더 크게</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="set-row">
+        <div><h3>화면 테마</h3>
+          <p class="desc">어둡게는 밤이나 어두운 창구에서 눈이 편합니다. 이 브라우저에만 저장됩니다.</p></div>
+        <div class="set-panel">
+          <div class="seg" id="themeSeg" role="group" aria-label="화면 테마">
+            <button type="button" data-th="" aria-pressed="true">밝게</button>
+            <button type="button" data-th="dark" aria-pressed="false">어둡게</button>
           </div>
         </div>
       </div>
@@ -341,6 +438,27 @@
           <div class="kv"><span>이번 실행에서 정리한 메모</span><b class="num" id="setMemos">-</b></div>
           <div class="kv"><span>오늘 답한 질문 (기록 기준)</span><b class="num" id="setTodayAsks">-</b></div>
           <div class="kv"><span>오늘 정리한 메모 (기록 기준)</span><b class="num" id="setTodayMemos">-</b></div>
+        </div>
+      </div>
+
+      <div class="set-row">
+        <div><h3>외부 AI (선택)</h3>
+          <p class="desc">기본은 이 PC의 로컬 모델입니다. 외부 AI를 켜면 마스킹이 끝난 문서 내용과 질문이 해당 서비스로 전송됩니다. 인터넷이 닿지 않는 폐쇄망에서는 연결 자체가 되지 않습니다. 키는 이 PC의 설정 파일에만 저장됩니다.</p></div>
+        <div class="set-panel">
+          <label for="extProvider">제공자</label>
+          <select id="extProvider">
+            <option value="">사용 안 함 (로컬 전용)</option>
+            <option value="openai">OpenAI (GPT)</option>
+            <option value="anthropic">Anthropic (Claude)</option>
+            <option value="gemini">Google (Gemini)</option>
+          </select>
+          <label for="extModel">모델명</label>
+          <input type="text" id="extModel" placeholder="gpt-4o-mini" autocomplete="off">
+          <label for="extKey">API 키</label>
+          <input type="password" id="extKey" placeholder="키를 입력하면 이 PC에만 저장됩니다" autocomplete="off">
+          <button class="btn sm" id="extSave" type="button">저장</button>
+          <button class="btn secondary sm" id="extClear" type="button">키 지우기</button>
+          <p class="desc" id="extState" style="margin-top:10px"></p>
         </div>
       </div>
     </section>
@@ -372,7 +490,16 @@ async function refreshStatus(){
     const m = $("stMasked");
     m.innerHTML = s.counters.masked_items + ' <span class="unit">건</span>';
     m.className = "vl big num" + (s.counters.masked_items > 0 ? " hue" : " grey");
-    $("scopeLine").textContent = "문서 " + s.doc_files + "개 · " + s.doc_chunks + "단락 기준";
+    $("scopeLine").textContent = "문서 " + s.doc_files + "개 · " + s.doc_chunks + "단락 기준 · " + s.search_mode + " 검색";
+    document.querySelectorAll("#maskSeg button").forEach(x => x.setAttribute("aria-pressed", x.dataset.ml === s.mask_level ? "true" : "false"));
+    const eb = $("extBanner");
+    if (s.external.enabled){ eb.textContent = "외부 AI 사용 중 (" + s.external.provider + "): 마스킹된 문서 내용과 질문이 외부 서비스로 전송됩니다."; eb.classList.add("show"); }
+    else eb.classList.remove("show");
+    if (document.activeElement !== $("extProvider")) $("extProvider").value = s.external.provider || "";
+    if (document.activeElement !== $("extModel")) $("extModel").value = s.external.model || "";
+    $("extKey").placeholder = s.external.has_key ? "키가 저장되어 있습니다 (바꿀 때만 입력)" : "키를 입력하면 이 PC에만 저장됩니다";
+    $("extState").textContent = s.external.enabled ? "외부 AI가 켜져 있습니다. 로컬 모델 대신 외부 모델이 답합니다."
+      : (s.external.provider ? "제공자는 골랐지만 키가 없어 로컬 모델로 동작합니다." : "로컬 전용으로 동작합니다.");
     $("setEngine").textContent = s.ollama ? "연결됨" : "꺼짐";
     $("setGpu").textContent = s.num_gpu ? s.num_gpu + "층" : "기본값";
     $("setModels").textContent = s.models.length + "개";
@@ -413,10 +540,11 @@ async function renderDocs(){
 }
 
 // 화면 전환
-const views = [["navAsk","viewAsk"],["navMemo","viewMemo"],["navSet","viewSet"]];
+const views = [["navAsk","viewAsk"],["navMemo","viewMemo"],["navLog","viewLog"],["navSet","viewSet"]];
 views.forEach(([n,v]) => $(n).addEventListener("click", () => {
   views.forEach(([n2,v2]) => { $(n2).setAttribute("aria-selected", n2===n ? "true":"false"); $(v2).hidden = v2!==v; });
   if (v === "viewSet") refreshStatus();
+  if (v === "viewLog") loadLog();
 }));
 $("refreshBtn").addEventListener("click", refreshStatus);
 
@@ -540,6 +668,7 @@ $("fileInput").addEventListener("change", async e => {
 // 메모
 function renderMasked(text){
   let h = esc(text);
+  h = h.replace(/\[([^\]]+?) 마스킹 ··(\d{4})\]/g, '<span class="redact">$1 ··$2</span>');
   h = h.replace(/\[([^\]]+?) 마스킹\]/g, '<span class="redact">$1</span>');
   h = h.replace(/([가-힣])\*{1,3}/g, '<span class="redact">$1**</span>');
   return h;
@@ -577,15 +706,105 @@ $("modelApply").addEventListener("click", async () => {
   try{ await api("/api/model", {qa_model: $("qaModelSel").value, memo_model: $("memoModelSel").value}); refreshStatus(); }
   catch(e){ showErr(e.message); }
 });
-document.querySelectorAll(".seg button").forEach(b => b.addEventListener("click", () => {
-  document.querySelectorAll(".seg button").forEach(x => x.setAttribute("aria-pressed", "false"));
+document.querySelectorAll("#fsSeg button").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll("#fsSeg button").forEach(x => x.setAttribute("aria-pressed", "false"));
   b.setAttribute("aria-pressed", "true");
   document.body.className = b.dataset.fs;
   localStorage.setItem("localdesk_fs", b.dataset.fs);
 }));
 (function(){ const fs = localStorage.getItem("localdesk_fs");
   if (fs){ document.body.className = fs;
-    document.querySelectorAll(".seg button").forEach(x => x.setAttribute("aria-pressed", x.dataset.fs === fs ? "true" : "false")); } })();
+    document.querySelectorAll("#fsSeg button").forEach(x => x.setAttribute("aria-pressed", x.dataset.fs === fs ? "true" : "false")); } })();
+
+// 화면 테마
+function applyTheme(th){
+  if (th) document.documentElement.dataset.theme = th; else delete document.documentElement.dataset.theme;
+  try{ localStorage.setItem("localdesk_theme", th || ""); }catch(e){}
+  document.querySelectorAll("#themeSeg button").forEach(x => x.setAttribute("aria-pressed", x.dataset.th === (th || "") ? "true" : "false"));
+}
+document.querySelectorAll("#themeSeg button").forEach(b => b.addEventListener("click", () => applyTheme(b.dataset.th)));
+applyTheme((() => { try{ return localStorage.getItem("localdesk_theme") || ""; }catch(e){ return ""; } })());
+
+// 마스킹 강도
+document.querySelectorAll("#maskSeg button").forEach(b => b.addEventListener("click", async () => {
+  try{ await api("/api/settings", {mask_level: b.dataset.ml}); refreshStatus(); }
+  catch(e){ showErr(e.message); }
+}));
+
+// 외부 AI 설정
+$("extSave").addEventListener("click", async () => {
+  try{ await api("/api/settings", {external: {provider: $("extProvider").value,
+      model: $("extModel").value.trim(), api_key: $("extKey").value.trim()}});
+    $("extKey").value = ""; refreshStatus(); }
+  catch(e){ showErr(e.message); }
+});
+$("extClear").addEventListener("click", async () => {
+  try{ await api("/api/settings", {external: {provider: $("extProvider").value, clear_key: true}});
+    $("extKey").value = ""; refreshStatus(); }
+  catch(e){ showErr(e.message); }
+});
+$("extProvider").addEventListener("change", () => {
+  const defs = {openai: "gpt-4o-mini", anthropic: "claude-sonnet-4-5", gemini: "gemini-2.5-flash"};
+  if (defs[$("extProvider").value] && !$("extModel").value) $("extModel").value = defs[$("extProvider").value];
+});
+
+// 업무 기록
+const isoDay = d => { const x = new Date(d.getTime() - d.getTimezoneOffset() * 60000); return x.toISOString().slice(0, 10); };
+let logDay = isoDay(new Date());
+const dayLabel = iso => { const [y, m, dd] = iso.split("-").map(Number);
+  const dt = new Date(y, m - 1, dd);
+  return y + "년 " + m + "월 " + dd + "일 (" + "일월화수목금토"[dt.getDay()] + ")"; };
+function renderTodos(items){
+  const box = $("todoList"); box.textContent = "";
+  if (!items.length){ box.innerHTML = '<p style="font-size:13px;color:var(--muted);margin:4px 0 0">할 일이 없습니다.</p>'; return; }
+  items.forEach(it => {
+    const row = document.createElement("div"); row.className = "todo" + (it.done ? " done" : "");
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = it.done;
+    cb.setAttribute("aria-label", "완료 표시");
+    cb.addEventListener("change", async () => {
+      const r = await api("/api/worklog/toggle", {date: logDay, id: it.id}); renderTodos(r.items); });
+    const tx = document.createElement("span"); tx.className = "tx"; tx.textContent = it.text;
+    const del = document.createElement("button"); del.className = "mini-btn"; del.type = "button"; del.textContent = "삭제";
+    del.addEventListener("click", async () => {
+      const r = await api("/api/worklog/delete", {date: logDay, id: it.id}); renderTodos(r.items); });
+    row.append(cb, tx, del); box.appendChild(row);
+  });
+}
+async function loadLog(){
+  $("logDate").textContent = dayLabel(logDay);
+  try{
+    const w = await api("/api/worklog?date=" + logDay);
+    $("lgAsks").innerHTML = w.counts.asks + ' <span class="unit">건</span>';
+    $("lgMemos").innerHTML = w.counts.memos + ' <span class="unit">건</span>';
+    const lm = $("lgMasked");
+    lm.innerHTML = w.counts.masked_items + ' <span class="unit">건</span>';
+    lm.className = "vl big num" + (w.counts.masked_items > 0 ? " hue" : " grey");
+    renderTodos(w.items);
+  }catch(e){ showErr(e.message); }
+  try{
+    const r = await api("/api/records?days=7");
+    const box = $("recordsBox"); box.textContent = "";
+    r.records.slice().reverse().forEach(rec => {
+      const row = document.createElement("div"); row.className = "rec-row";
+      const d = document.createElement("span"); d.className = "d"; d.textContent = dayLabel(rec.date);
+      const v = document.createElement("span"); v.className = "num";
+      v.textContent = "질문 " + rec.asks + " · 메모 " + rec.memos + " · 가림 " + rec.masked_items + "건";
+      row.append(d, v); box.appendChild(row);
+    });
+    if (!r.records.length) box.textContent = "아직 기록이 없습니다.";
+  }catch(e){ /* 기록 표가 비어도 화면은 유지 */ }
+}
+$("todoForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const text = $("todoInput").value.trim(); if (!text) return;
+  try{ const r = await api("/api/worklog/add", {date: logDay, text}); $("todoInput").value = ""; renderTodos(r.items); }
+  catch(err){ showErr(err.message); }
+});
+function shiftDay(n){ const [y, m, dd] = logDay.split("-").map(Number);
+  logDay = isoDay(new Date(y, m - 1, dd + n)); loadLog(); }
+$("dayPrev").addEventListener("click", () => shiftDay(-1));
+$("dayNext").addEventListener("click", () => shiftDay(1));
+$("dayToday").addEventListener("click", () => { logDay = isoDay(new Date()); loadLog(); });
 
 refreshStatus(); renderRecent(); setInterval(refreshStatus, 20000);
 </script>

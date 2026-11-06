@@ -13,6 +13,7 @@ Python 표준 라이브러리만으로 동작하므로 폐쇄망 PC에 그대로
   LOCAL_AGENT_MODEL       기본 모델 (질문·요약 공통 초기값)
   LOCAL_AGENT_NUM_GPU     GPU 적재 층 수
 """
+import hashlib
 import json
 import os
 import threading
@@ -52,10 +53,9 @@ def append_log(entry):
         pass
 
 
-def log_today():
-    """오늘 날짜의 기록만 모아 건수를 센다 (재실행해도 남는 누적)."""
-    today = datetime.now().date().isoformat()
-    agg = {"asks": 0, "memos": 0, "masked_items": 0}
+def log_all_counts():
+    """사용 기록 전체를 날짜별로 집계한다."""
+    agg = {}
     try:
         with open(LOG_FILE, encoding="utf-8") as f:
             for line in f:
@@ -63,18 +63,202 @@ def log_today():
                     e = json.loads(line)
                 except ValueError:
                     continue
-                if not str(e.get("ts", "")).startswith(today):
+                d = str(e.get("ts", ""))[:10]
+                if not d:
                     continue
+                a = agg.setdefault(d, {"asks": 0, "memos": 0, "masked_items": 0})
                 if e.get("type") == "ask":
-                    agg["asks"] += 1
+                    a["asks"] += 1
                 elif e.get("type") == "summarize":
-                    agg["memos"] += 1
-                    agg["masked_items"] += sum((e.get("counts") or {}).values())
+                    a["memos"] += 1
+                    a["masked_items"] += sum((e.get("counts") or {}).values())
                 elif e.get("type") == "mask":
-                    agg["masked_items"] += sum((e.get("counts") or {}).values())
+                    a["masked_items"] += sum((e.get("counts") or {}).values())
     except OSError:
         pass
     return agg
+
+
+def log_counts(date_str):
+    return log_all_counts().get(date_str, {"asks": 0, "memos": 0, "masked_items": 0})
+
+
+def log_today():
+    return log_counts(datetime.now().date().isoformat())
+
+
+# ---------- 설정 (이 PC에만 저장되는 파일) ----------
+SETTINGS_FILE = os.path.join(BASE_DIR, "local_settings.json")
+DEFAULT_EXTERNAL_MODELS = {"openai": "gpt-4o-mini", "anthropic": "claude-sonnet-4-5",
+                           "gemini": "gemini-2.5-flash"}
+
+
+def load_settings():
+    s = {"mask_level": "full", "external": {"provider": "", "model": "", "api_key": ""}}
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8") as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        return s
+    if saved.get("mask_level") in ("full", "partial"):
+        s["mask_level"] = saved["mask_level"]
+    if saved.get("qa_model"):
+        STATE["qa_model"] = saved["qa_model"]
+    if saved.get("memo_model"):
+        STATE["memo_model"] = saved["memo_model"]
+    ext = saved.get("external") or {}
+    if ext.get("provider") in DEFAULT_EXTERNAL_MODELS:
+        s["external"] = {"provider": ext["provider"],
+                         "model": ext.get("model") or DEFAULT_EXTERNAL_MODELS[ext["provider"]],
+                         "api_key": ext.get("api_key", "")}
+    return s
+
+
+def save_settings():
+    data = {"mask_level": SETTINGS["mask_level"], "external": SETTINGS["external"],
+            "qa_model": STATE["qa_model"], "memo_model": STATE["memo_model"]}
+    try:
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=1)
+    except OSError:
+        pass
+
+
+SETTINGS = load_settings()
+
+
+def external_active():
+    e = SETTINGS["external"]
+    return bool(e["provider"] and e["api_key"])
+
+
+def _json_req(url, body, headers):
+    req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"),
+                                 headers={"Content-Type": "application/json", **headers})
+    with urllib.request.urlopen(req, timeout=180) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def external_chat(messages):
+    """외부 AI 호출. 사용자가 설정에서 켠 경우에만 쓰이며, 받는 내용은 마스킹이 끝난 것만이다."""
+    ext = SETTINGS["external"]
+    provider, key, model = ext["provider"], ext["api_key"], ext["model"]
+    system = "\n".join(m["content"] for m in messages if m["role"] == "system")
+    convo = [m for m in messages if m["role"] != "system"]
+    try:
+        if provider == "openai":
+            data = _json_req("https://api.openai.com/v1/chat/completions",
+                             {"model": model, "messages": messages},
+                             {"Authorization": f"Bearer {key}"})
+            return data["choices"][0]["message"]["content"]
+        if provider == "anthropic":
+            data = _json_req("https://api.anthropic.com/v1/messages",
+                             {"model": model, "max_tokens": 2048, "system": system,
+                              "messages": convo},
+                             {"x-api-key": key, "anthropic-version": "2023-06-01"})
+            return "".join(b.get("text", "") for b in data.get("content", []))
+        if provider == "gemini":
+            contents = [{"role": "model" if m["role"] == "assistant" else "user",
+                         "parts": [{"text": m["content"]}]} for m in convo]
+            body = {"contents": contents}
+            if system:
+                body["system_instruction"] = {"parts": [{"text": system}]}
+            data = _json_req(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                body, {"x-goog-api-key": key})
+            return "".join(p.get("text", "") for p in data["candidates"][0]["content"]["parts"])
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"외부 AI가 오류를 돌려줬습니다 ({e.code}). 키와 모델명을 확인하세요.") from None
+    except urllib.error.URLError:
+        raise RuntimeError("외부 AI에 연결할 수 없습니다. 인터넷이 닿지 않는 망(폐쇄망)에서는 "
+                           "외부 AI를 사용할 수 없습니다.") from None
+    raise RuntimeError("외부 AI 제공자가 설정되지 않았습니다.")
+
+
+# ---------- 업무 일지 (날짜별 할 일) ----------
+WORKLOG_FILE = os.path.join(BASE_DIR, "worklog.json")
+
+
+def load_worklog():
+    try:
+        with open(WORKLOG_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+        if isinstance(d, dict) and "days" in d:
+            return d
+    except (OSError, ValueError):
+        pass
+    return {"seq": 0, "days": {}}
+
+
+def save_worklog(d):
+    try:
+        with open(WORKLOG_FILE, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=1)
+    except OSError:
+        pass
+
+
+# ---------- 의미 검색 색인 (임베딩, 백그라운드 구축) ----------
+EMBED_CACHE_FILE = os.path.join(BASE_DIR, "embeddings_cache.json")
+EMBED = {"vecs": {}, "ready": False, "building": False}
+
+
+def _text_key(text):
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()
+
+
+def build_embeddings():
+    """단락 임베딩을 백그라운드로 만든다. 모델이 없으면 단어 검색 모드로 남는다."""
+    if EMBED["building"]:
+        return
+    EMBED["building"] = True
+
+    def run():
+        try:
+            try:
+                with open(EMBED_CACHE_FILE, encoding="utf-8") as f:
+                    cache = json.load(f)
+            except (OSError, ValueError):
+                cache = {}
+            chunks = STATE["chunks"]
+            missing = [c for c in chunks if _text_key(c["text"]) not in cache]
+            for i in range(0, len(missing), 32):
+                batch = missing[i:i + 32]
+                vecs = agent.embed([c["text"] for c in batch])
+                if vecs is None:
+                    return
+                for c, v in zip(batch, vecs):
+                    cache[_text_key(c["text"])] = v
+            EMBED["vecs"] = {_text_key(c["text"]): cache[_text_key(c["text"])]
+                             for c in chunks if _text_key(c["text"]) in cache}
+            EMBED["ready"] = bool(EMBED["vecs"])
+            try:
+                with open(EMBED_CACHE_FILE, "w", encoding="utf-8") as f:
+                    json.dump(cache, f)
+            except OSError:
+                pass
+        finally:
+            EMBED["building"] = False
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+def hybrid_retrieve(chunks, query):
+    """단어 검색 + 의미 검색. 어느 한쪽이라도 기준을 넘으면 근거로 쓴다."""
+    qv = agent.ngrams(query)
+    word = {_text_key(c["text"]): agent.cosine(qv, c["vec"]) for c in chunks}
+    emb = {}
+    if EMBED["ready"]:
+        qe = agent.embed([query])
+        if qe:
+            emb = {_text_key(c["text"]): agent.vec_cosine(qe[0], v)
+                   for c in chunks if (v := EMBED["vecs"].get(_text_key(c["text"])))}
+    hits = [c for c in chunks
+            if word.get(_text_key(c["text"]), 0.0) > agent.RETRIEVE_THRESHOLD
+            or emb.get(_text_key(c["text"]), 0.0) > agent.EMBED_THRESHOLD]
+    hits.sort(key=lambda c: max(word.get(_text_key(c["text"]), 0.0),
+                                emb.get(_text_key(c["text"]), 0.0)), reverse=True)
+    return hits[:3]
 
 
 def ollama_status():
@@ -123,6 +307,8 @@ def summarize(masked_text):
         {"role": "system", "content": "당신은 창구 상담 메모를 정리하는 비서입니다. 마스킹된 기호는 그대로 두세요."},
         {"role": "user", "content": f"다음 상담 메모를 세 줄로 요약해 주세요.\n\n{masked_text}"},
     ]
+    if external_active():
+        return external_chat(msgs)
     with STATE["chat_lock"]:
         use_model(STATE["memo_model"])
         return agent.chat(msgs)
@@ -172,6 +358,12 @@ class Handler(BaseHTTPRequestHandler):
                 "num_gpu": STATE["num_gpu"],
                 "doc_files": len(docs), "doc_chunks": len(STATE["chunks"]),
                 "counters": STATE["counters"], "today": log_today(),
+                "mask_level": SETTINGS["mask_level"],
+                "search_mode": "의미+단어" if EMBED["ready"] else "단어",
+                "external": {"provider": SETTINGS["external"]["provider"],
+                             "model": SETTINGS["external"]["model"],
+                             "enabled": external_active(),
+                             "has_key": bool(SETTINGS["external"]["api_key"])},
             })
         elif self.path == "/api/docs":
             docs = self.doc_summary()
@@ -181,6 +373,25 @@ class Handler(BaseHTTPRequestHandler):
             name = unquote(parse_qs(urlparse(self.path).query).get("name", [""])[0])
             paras = [c["text"] for c in STATE["chunks"] if c["source"] == name]
             self.send_json({"name": name, "paras": paras})
+        elif self.path.startswith("/api/worklog"):
+            from urllib.parse import urlparse, parse_qs
+            d = parse_qs(urlparse(self.path).query).get("date", [""])[0] \
+                or datetime.now().date().isoformat()
+            wl = load_worklog()
+            self.send_json({"date": d, "items": wl["days"].get(d, []),
+                            "counts": log_counts(d)})
+        elif self.path.startswith("/api/records"):
+            from urllib.parse import urlparse, parse_qs
+            from datetime import timedelta
+            days = int(parse_qs(urlparse(self.path).query).get("days", ["7"])[0])
+            all_counts = log_all_counts()
+            out = []
+            base = datetime.now().date()
+            for i in range(days - 1, -1, -1):
+                d = (base - timedelta(days=i)).isoformat()
+                c = all_counts.get(d, {"asks": 0, "memos": 0, "masked_items": 0})
+                out.append({"date": d, **c})
+            self.send_json({"records": out})
         else:
             self.send_json({"error": "not found"}, 404)
 
@@ -190,16 +401,44 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/ask_stream":
                 self.handle_ask_stream(data)
             elif self.path == "/api/mask":
-                masked, found = agent.mask_text(data.get("text", ""))
+                masked, found = agent.mask_text(data.get("text", ""), SETTINGS["mask_level"])
                 counts = self.counts_of(found)
                 append_log({"type": "mask", "counts": counts})
                 self.send_json({"masked": masked, "counts": counts})
             elif self.path == "/api/reload":
                 with STATE["lock"]:
                     STATE["chunks"] = agent.load_chunks()
+                build_embeddings()
                 docs = self.doc_summary()
                 self.send_json({"ok": True, "doc_files": len(docs),
                                 "doc_chunks": len(STATE["chunks"])})
+            elif self.path == "/api/settings":
+                self.handle_settings(data)
+            elif self.path == "/api/worklog/add":
+                d = data.get("date") or datetime.now().date().isoformat()
+                text = (data.get("text") or "").strip()
+                if not text:
+                    self.send_json({"error": "할 일을 입력해 주세요."}, 400)
+                    return
+                wl = load_worklog()
+                wl["seq"] += 1
+                item = {"id": wl["seq"], "text": text, "done": False}
+                wl["days"].setdefault(d, []).append(item)
+                save_worklog(wl)
+                self.send_json({"item": item, "items": wl["days"][d]})
+            elif self.path in ("/api/worklog/toggle", "/api/worklog/delete"):
+                d = data.get("date") or datetime.now().date().isoformat()
+                wl = load_worklog()
+                items = wl["days"].get(d, [])
+                if self.path.endswith("toggle"):
+                    for it in items:
+                        if it["id"] == data.get("id"):
+                            it["done"] = not it["done"]
+                else:
+                    items = [it for it in items if it["id"] != data.get("id")]
+                    wl["days"][d] = items
+                save_worklog(wl)
+                self.send_json({"items": wl["days"].get(d, [])})
             elif self.path == "/api/summarize":
                 self.handle_summarize(data)
             elif self.path == "/api/docs/upload":
@@ -222,10 +461,10 @@ class Handler(BaseHTTPRequestHandler):
         if not q:
             self.send_json({"error": "질문을 입력해 주세요."}, 400)
             return
-        masked_q, found = agent.mask_text(q)
+        masked_q, found = agent.mask_text(q, SETTINGS["mask_level"])
         STATE["counters"]["masked_items"] += len(found)
         with STATE["lock"]:
-            hits = agent.retrieve(STATE["chunks"], masked_q)
+            hits = hybrid_retrieve(STATE["chunks"], masked_q)
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
@@ -255,19 +494,26 @@ class Handler(BaseHTTPRequestHandler):
         ]
         started = time.time()
         try:
-            with STATE["chat_lock"]:
-                use_model(STATE["qa_model"])
-                for event in chat_stream(msgs):
-                    emit(event)
+            if external_active():
+                emit({"type": "delta", "text": external_chat(msgs)})
+                emit({"type": "stats", "eval_count": None, "tok_per_sec": None,
+                      "external": SETTINGS["external"]["provider"]})
+            else:
+                with STATE["chat_lock"]:
+                    use_model(STATE["qa_model"])
+                    for event in chat_stream(msgs):
+                        emit(event)
             STATE["counters"]["asks"] += 1
-            append_log({"type": "ask", "found": True, "model": STATE["qa_model"],
+            append_log({"type": "ask", "found": True,
+                        "model": ("external:" + SETTINGS["external"]["provider"])
+                                 if external_active() else STATE["qa_model"],
                         "masked_count": len(found)})
             emit({"type": "done", "elapsed_s": round(time.time() - started, 1)})
         except RuntimeError as e:
             emit({"type": "error", "message": str(e)})
 
     def handle_summarize(self, data):
-        masked, found = agent.mask_text(data.get("text", ""))
+        masked, found = agent.mask_text(data.get("text", ""), SETTINGS["mask_level"])
         if not masked.strip():
             self.send_json({"error": "메모를 입력해 주세요."}, 400)
             return
@@ -277,6 +523,34 @@ class Handler(BaseHTTPRequestHandler):
         counts = self.counts_of(found)
         append_log({"type": "summarize", "model": STATE["memo_model"], "counts": counts})
         self.send_json({"masked": masked, "counts": counts, "summary": summary})
+
+    def handle_settings(self, data):
+        if data.get("mask_level") in ("full", "partial"):
+            SETTINGS["mask_level"] = data["mask_level"]
+        if data.get("qa_model"):
+            STATE["qa_model"] = data["qa_model"]
+        if data.get("memo_model"):
+            STATE["memo_model"] = data["memo_model"]
+        ext = data.get("external")
+        if isinstance(ext, dict):
+            provider = ext.get("provider", SETTINGS["external"]["provider"])
+            if provider == "":
+                SETTINGS["external"] = {"provider": "", "model": "", "api_key": ""}
+            elif provider in DEFAULT_EXTERNAL_MODELS:
+                key = ext.get("api_key") or SETTINGS["external"]["api_key"]
+                if ext.get("clear_key"):
+                    key = ""
+                SETTINGS["external"] = {
+                    "provider": provider,
+                    "model": ext.get("model") or SETTINGS["external"]["model"]
+                            or DEFAULT_EXTERNAL_MODELS[provider],
+                    "api_key": key}
+        save_settings()
+        self.send_json({"ok": True, "mask_level": SETTINGS["mask_level"],
+                        "external": {"provider": SETTINGS["external"]["provider"],
+                                     "model": SETTINGS["external"]["model"],
+                                     "enabled": external_active(),
+                                     "has_key": bool(SETTINGS["external"]["api_key"])}})
 
     def handle_upload(self, data):
         name = os.path.basename((data.get("name") or "").strip())
@@ -289,6 +563,7 @@ class Handler(BaseHTTPRequestHandler):
             f.write(content)
         with STATE["lock"]:
             STATE["chunks"] = agent.load_chunks()
+        build_embeddings()
         self.send_json({"ok": True, "doc_chunks": len(STATE["chunks"])})
 
 
@@ -307,6 +582,7 @@ def main():
         print("사용 가능한 포트를 찾지 못했습니다.")
         return
     url = f"http://127.0.0.1:{port}"
+    build_embeddings()
     print(f"로컬 업무 비서 실행 중: {url}  (종료: Ctrl+C)")
     print(f"질문 모델: {STATE['qa_model']} | 요약 모델: {STATE['memo_model']} | 색인 문서 단락: {len(STATE['chunks'])}개 | 외부 연결: 없음")
     threading.Timer(0.8, lambda: webbrowser.open(url)).start()
