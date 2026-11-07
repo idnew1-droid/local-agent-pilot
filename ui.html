@@ -178,6 +178,40 @@
   .rec-row{display:flex;justify-content:space-between;gap:14px;padding:8px 2px;border-bottom:1px solid var(--rule);font-size:13.5px}
   .rec-row:last-child{border-bottom:0}
   .rec-row .d{color:var(--muted);flex:none}
+  .todo .tm{font-size:12.5px;color:var(--hue);font-weight:700;min-width:44px;flex:none}
+  .cal-head,.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+  .cal-head span{text-align:center;font-size:12px;color:var(--muted);padding:4px 0}
+  .cal-day{min-height:66px;border:1px solid var(--rule);border-radius:6px;padding:5px 7px;
+    cursor:pointer;background:var(--surface);text-align:left;font:inherit;color:inherit}
+  .cal-day:hover{border-color:var(--control)}
+  .cal-day .dn{font-size:13px;font-weight:600}
+  .cal-day .cm{font-size:11px;color:var(--muted);margin-top:3px;line-height:1.55}
+  .cal-day .cm b{color:var(--hue);font-weight:600}
+  .cal-day.dim{opacity:.35}
+  .cal-day.today .dn{color:var(--hue)}
+  .cal-day.sel{outline:2px solid var(--hue);outline-offset:-2px}
+  .ans{line-height:1.75}
+  .ans p{margin:0 0 10px}
+  .ans p:last-child{margin-bottom:0}
+  .ans ul,.ans ol{margin:0 0 10px;padding-left:22px}
+  .ans li{margin:3px 0}
+  .summary-text.ans{white-space:normal}
+  .viewer{position:fixed;inset:0;background:rgba(20,24,29,.45);display:flex;align-items:center;
+    justify-content:center;z-index:50;padding:24px}
+  .viewer[hidden]{display:none}
+  .viewer-box{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-panel);
+    width:min(860px,100%);max-height:88vh;display:flex;flex-direction:column}
+  .viewer-head{display:flex;align-items:center;justify-content:space-between;gap:14px;
+    padding:14px 18px;border-bottom:1px solid var(--rule);flex-wrap:wrap}
+  .viewer-head h3{font-size:16px}
+  .viewer-head input{height:34px;padding:0 10px;border:1px solid var(--border);
+    border-radius:var(--radius-control);background:var(--surface);color:var(--text);width:190px}
+  .viewer-body{overflow:auto;padding:18px 22px;line-height:1.8}
+  .viewer-body p{margin:0 0 12px}
+  .viewer-body mark{background:#d7e4f5;color:inherit;border-radius:2px;padding:0 1px}
+  .viewer-body mark.cur{background:var(--hue);color:#fff}
+  [data-theme="dark"] .viewer-body mark{background:#2c4a73}
+  [data-theme="dark"] .viewer-body mark.cur{background:var(--hue);color:#fff}
   .set-panel input[type="text"],.set-panel input[type="password"]{width:100%;height:40px;padding:0 10px;
     border:1px solid var(--border);border-radius:var(--radius-control);background:var(--surface);margin-bottom:14px}
 
@@ -340,7 +374,7 @@
         <div class="result-head"><h3>요약</h3>
           <button class="mini-btn" id="printSum" type="button" style="margin-left:auto">인쇄</button>
           <button class="mini-btn" id="copySum" type="button">복사</button></div>
-        <div class="summary-text" id="sumBox"></div>
+        <div class="summary-text ans" id="sumBox"></div>
       </div>
     </section>
 
@@ -348,31 +382,34 @@
     <section id="viewLog" hidden>
       <div class="title-row"><h2>업무 기록</h2>
         <span class="scope">
-          <button class="mini-btn" id="dayPrev" type="button">이전 날</button>
-          <b id="logDate" class="num"></b>
-          <button class="mini-btn" id="dayNext" type="button">다음 날</button>
-          <button class="mini-btn" id="dayToday" type="button">오늘</button>
+          <button class="mini-btn" id="monPrev" type="button">이전 달</button>
+          <b id="calTitle" class="num"></b>
+          <button class="mini-btn" id="monNext" type="button">다음 달</button>
+          <button class="mini-btn" id="monToday" type="button">오늘</button>
         </span></div>
-      <p class="finding">그날 처리한 건수와 할 일을 함께 봅니다. 처리 기록에는 질문이나 메모의 내용을 남기지 않습니다.</p>
+      <p class="finding">달력에서 날짜를 고르면 그날 처리한 건수와 일정이 나옵니다. 처리 기록에는 질문이나 메모의 내용을 남기지 않습니다.</p>
 
+      <div class="panel" style="padding:16px 18px;margin-bottom:var(--gap)">
+        <div class="cal-head"><span>일</span><span>월</span><span>화</span><span>수</span><span>목</span><span>금</span><span>토</span></div>
+        <div class="cal" id="calGrid"></div>
+        <p class="desc" id="weekLine" style="margin-top:12px"></p>
+      </div>
+
+      <div class="title-row"><h3 id="dayTitle" style="font-size:17px"></h3></div>
       <div class="panel stats" role="group" aria-label="그날 처리 건수" style="grid-template-columns:repeat(3,1fr)">
         <div class="stat"><div class="lb">답한 질문</div><div class="vl big num" id="lgAsks">-</div></div>
         <div class="stat"><div class="lb">정리한 메모</div><div class="vl big num" id="lgMemos">-</div></div>
         <div class="stat"><div class="lb">가린 개인정보</div><div class="vl big num" id="lgMasked">-</div></div>
       </div>
 
-      <div class="panel" style="padding:18px 20px;margin-bottom:var(--gap)">
-        <div class="result-head"><h3>할 일</h3></div>
+      <div class="panel" style="padding:18px 20px">
+        <div class="result-head"><h3>일정 · 할 일</h3></div>
         <div id="todoList"></div>
         <form class="composer" id="todoForm" style="margin-top:12px">
-          <input id="todoInput" type="text" placeholder="할 일을 적고 Enter" autocomplete="off" aria-label="할 일 입력">
+          <input type="time" id="todoTime" aria-label="시간 (선택)" style="flex:0 0 118px">
+          <input id="todoInput" type="text" placeholder="할 일을 적고 Enter (시간은 선택)" autocomplete="off" aria-label="할 일 입력">
           <button class="btn secondary" type="submit">추가</button>
         </form>
-      </div>
-
-      <div class="panel result">
-        <div class="result-head"><h3>최근 7일 처리 기록</h3></div>
-        <div id="recordsBox"></div>
       </div>
     </section>
 
@@ -465,6 +502,22 @@
   </main>
 </div>
 
+<div class="viewer" id="viewer" hidden role="dialog" aria-modal="true" aria-label="문서 읽기">
+  <div class="viewer-box">
+    <div class="viewer-head">
+      <h3 id="viewerTitle"></h3>
+      <span class="scope">
+        <input type="search" id="viewerQuery" placeholder="문서 안에서 찾기" aria-label="문서 안에서 찾기">
+        <span class="num" id="viewerCount"></span>
+        <button class="mini-btn" id="viewerPrev" type="button">이전</button>
+        <button class="mini-btn" id="viewerNext" type="button">다음</button>
+        <button class="mini-btn" id="viewerClose" type="button">닫기</button>
+      </span>
+    </div>
+    <div class="viewer-body" id="viewerBody"></div>
+  </div>
+</div>
+
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -524,17 +577,10 @@ async function renderDocs(){
   dl.docs.forEach(d => {
     const row = document.createElement("button"); row.className = "doc-row"; row.type = "button";
     const nm = document.createElement("span"); nm.className = "nm"; nm.textContent = d.name;
-    const ct = document.createElement("span"); ct.className = "ct num"; ct.textContent = d.paras + "단락";
+    const ct = document.createElement("span"); ct.className = "ct num"; ct.textContent = d.paras + "단락 · 읽기";
     row.append(nm, ct);
-    const pv = document.createElement("div"); pv.className = "doc-preview";
-    row.addEventListener("click", async () => {
-      if (pv.classList.contains("open")){ pv.classList.remove("open"); return; }
-      const data = await api("/api/docs/preview?name=" + encodeURIComponent(d.name)).catch(() => null);
-      pv.textContent = "";
-      (data?.paras || []).forEach(t => { const p = document.createElement("p"); p.textContent = t; pv.appendChild(p); });
-      pv.classList.add("open");
-    });
-    list.append(row, pv);
+    row.addEventListener("click", () => openViewer(d.name));
+    list.appendChild(row);
   });
   if (!dl.docs.length) list.innerHTML = '<p class="hint" style="font-size:12.5px;color:var(--muted);padding:0 8px">아직 문서가 없습니다.</p>';
 }
@@ -573,11 +619,11 @@ $("askForm").addEventListener("submit", async e => {
   const ex = document.createElement("div"); ex.className = "exchange";
   const qb = document.createElement("div"); qb.className = "q"; qb.textContent = q;
   const ab = document.createElement("div"); ab.className = "a";
-  const body = document.createElement("span"); ab.appendChild(body);
+  const body = document.createElement("div"); body.className = "ans"; ab.appendChild(body);
   const cur = document.createElement("span"); cur.className = "cursor"; ab.appendChild(cur);
   ex.append(qb, ab); thread.appendChild(ex); ex.scrollIntoView({behavior:"smooth", block:"nearest"});
   $("askBtn").disabled = true;
-  let meta = null, stats = null, errMsg = null;
+  let meta = null, stats = null, errMsg = null, fullText = "";
   try{
     const r = await fetch("/api/ask_stream", {method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({question: q})});
@@ -591,7 +637,7 @@ $("askForm").addEventListener("submit", async e => {
         if (!line) continue;
         const ev = JSON.parse(line);
         if (ev.type === "meta"){ meta = ev; if (ev.found === false) body.textContent = ev.answer; }
-        else if (ev.type === "delta"){ body.textContent += ev.text; }
+        else if (ev.type === "delta"){ fullText += ev.text; body.textContent = fullText; }
         else if (ev.type === "stats"){ stats = ev; }
         else if (ev.type === "error"){ errMsg = ev.message; }
       }
@@ -599,6 +645,7 @@ $("askForm").addEventListener("submit", async e => {
   }catch(err){ errMsg = err.message; }
   cur.remove(); $("askBtn").disabled = false; $("askInput").focus();
   if (errMsg){ body.textContent = body.textContent || errMsg; showErr(errMsg); }
+  else if (meta && meta.found && fullText) body.innerHTML = renderRich(fullText);
   if (meta){
     if (meta.masked_count > 0){
       const note = document.createElement("div"); note.className = "masked-note";
@@ -666,6 +713,26 @@ $("fileInput").addEventListener("change", async e => {
 });
 
 // 메모
+function renderRich(text){
+  const lines = text.split("\n");
+  let html = "", list = null;
+  const closeList = () => { if (list){ html += "</" + list + ">"; list = null; } };
+  const inline = s => esc(s).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  for (const raw of lines){
+    const line = raw.trimEnd();
+    const mUl = line.match(/^\s*[-•·]\s+(.*)$/);
+    const mOl = line.match(/^\s*\d+[.)]\s+(.*)$/);
+    if (mUl){ if (list !== "ul"){ closeList(); html += "<ul>"; list = "ul"; } html += "<li>" + inline(mUl[1]) + "</li>"; }
+    else if (mOl){ if (list !== "ol"){ closeList(); html += "<ol>"; list = "ol"; } html += "<li>" + inline(mOl[1]) + "</li>"; }
+    else if (!line.trim()){ closeList(); }
+    else { closeList(); html += "<p>" + inline(line.trim()) + "</p>"; }
+  }
+  closeList();
+  html = html.replace(/\[([^\]]+?) 마스킹 ··(\d{4})\]/g, '<span class="redact">$1 ··$2</span>');
+  html = html.replace(/\[([^\]]+?) 마스킹\]/g, '<span class="redact">$1</span>');
+  return html;
+}
+
 function renderMasked(text){
   let h = esc(text);
   h = h.replace(/\[([^\]]+?) 마스킹 ··(\d{4})\]/g, '<span class="redact">$1 ··$2</span>');
@@ -691,7 +758,7 @@ async function runMemo(summarize){
       s.innerHTML = esc(k) + " <b class='num'>" + v + "건</b>"; mc.appendChild(s); });
     if (!counts.length) mc.textContent = "가릴 개인정보가 없습니다.";
     $("maskResult").hidden = false;
-    if (summarize){ lastSummary = r.summary; $("sumBox").textContent = r.summary; $("sumResult").hidden = false; }
+    if (summarize){ lastSummary = r.summary; $("sumBox").innerHTML = renderRich(r.summary); $("sumResult").hidden = false; }
     refreshStatus();
   }catch(err){ showErr(err.message); }
   btn.disabled = false;
@@ -748,12 +815,53 @@ $("extProvider").addEventListener("change", () => {
   if (defs[$("extProvider").value] && !$("extModel").value) $("extModel").value = defs[$("extProvider").value];
 });
 
-// 업무 기록
+// 업무 기록 (달력)
 const isoDay = d => { const x = new Date(d.getTime() - d.getTimezoneOffset() * 60000); return x.toISOString().slice(0, 10); };
 let logDay = isoDay(new Date());
+let calMonth = logDay.slice(0, 7);
+let calData = {counts: {}, todos: {}};
 const dayLabel = iso => { const [y, m, dd] = iso.split("-").map(Number);
   const dt = new Date(y, m - 1, dd);
   return y + "년 " + m + "월 " + dd + "일 (" + "일월화수목금토"[dt.getDay()] + ")"; };
+function renderCalendar(){
+  const [y, m] = calMonth.split("-").map(Number);
+  $("calTitle").textContent = y + "년 " + m + "월";
+  const grid = $("calGrid"); grid.textContent = "";
+  const first = new Date(y, m - 1, 1);
+  const startOffset = first.getDay();
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const todayIso = isoDay(new Date());
+  for (let i = 0; i < startOffset; i++){
+    const cell = document.createElement("div"); cell.className = "cal-day dim"; grid.appendChild(cell);
+  }
+  for (let d = 1; d <= daysInMonth; d++){
+    const iso = calMonth + "-" + String(d).padStart(2, "0");
+    const cell = document.createElement("button"); cell.type = "button";
+    cell.className = "cal-day" + (iso === todayIso ? " today" : "") + (iso === logDay ? " sel" : "");
+    const dn = document.createElement("div"); dn.className = "dn num"; dn.textContent = d;
+    cell.appendChild(dn);
+    const c = calData.counts[iso], t = calData.todos[iso];
+    const cm = document.createElement("div"); cm.className = "cm";
+    const parts = [];
+    if (c && (c.asks || c.memos)) parts.push("질문 <b>" + c.asks + "</b> · 메모 <b>" + c.memos + "</b>");
+    if (t) parts.push("할 일 " + t.done + "/" + t.total);
+    cm.innerHTML = parts.join("<br>");
+    cell.appendChild(cm);
+    cell.addEventListener("click", () => { logDay = iso; renderCalendar(); loadDay(); });
+    grid.appendChild(cell);
+  }
+}
+async function loadCalendar(){
+  try{ calData = await api("/api/calendar?month=" + calMonth); }catch(e){ /* 달력이 비어도 상세는 동작 */ }
+  renderCalendar();
+  try{
+    const r = await api("/api/records?days=7");
+    const a = r.records.reduce((s, x) => s + x.asks, 0);
+    const mm = r.records.reduce((s, x) => s + x.memos, 0);
+    const k = r.records.reduce((s, x) => s + x.masked_items, 0);
+    $("weekLine").textContent = "최근 7일 — 질문 " + a + "건 · 메모 " + mm + "건 · 가린 개인정보 " + k + "건";
+  }catch(e){ $("weekLine").textContent = ""; }
+}
 function renderTodos(items){
   const box = $("todoList"); box.textContent = "";
   if (!items.length){ box.innerHTML = '<p style="font-size:13px;color:var(--muted);margin:4px 0 0">할 일이 없습니다.</p>'; return; }
@@ -762,16 +870,22 @@ function renderTodos(items){
     const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = it.done;
     cb.setAttribute("aria-label", "완료 표시");
     cb.addEventListener("change", async () => {
-      const r = await api("/api/worklog/toggle", {date: logDay, id: it.id}); renderTodos(r.items); });
+      const r = await api("/api/worklog/toggle", {date: logDay, id: it.id}); renderTodos(r.items); loadCalendar(); });
+    if (it.time){ const tm = document.createElement("span"); tm.className = "tm num"; tm.textContent = it.time; row.appendChild(tm); }
     const tx = document.createElement("span"); tx.className = "tx"; tx.textContent = it.text;
+    const mv = document.createElement("button"); mv.className = "mini-btn"; mv.type = "button"; mv.textContent = "내일로";
+    mv.addEventListener("click", async () => {
+      const [yy, mo, dd] = logDay.split("-").map(Number);
+      const to = isoDay(new Date(yy, mo - 1, dd + 1));
+      const r = await api("/api/worklog/move", {date: logDay, id: it.id, to}); renderTodos(r.items); loadCalendar(); });
     const del = document.createElement("button"); del.className = "mini-btn"; del.type = "button"; del.textContent = "삭제";
     del.addEventListener("click", async () => {
-      const r = await api("/api/worklog/delete", {date: logDay, id: it.id}); renderTodos(r.items); });
-    row.append(cb, tx, del); box.appendChild(row);
+      const r = await api("/api/worklog/delete", {date: logDay, id: it.id}); renderTodos(r.items); loadCalendar(); });
+    row.append(cb, tx, mv, del); box.appendChild(row);
   });
 }
-async function loadLog(){
-  $("logDate").textContent = dayLabel(logDay);
+async function loadDay(){
+  $("dayTitle").textContent = dayLabel(logDay);
   try{
     const w = await api("/api/worklog?date=" + logDay);
     $("lgAsks").innerHTML = w.counts.asks + ' <span class="unit">건</span>';
@@ -781,30 +895,68 @@ async function loadLog(){
     lm.className = "vl big num" + (w.counts.masked_items > 0 ? " hue" : " grey");
     renderTodos(w.items);
   }catch(e){ showErr(e.message); }
-  try{
-    const r = await api("/api/records?days=7");
-    const box = $("recordsBox"); box.textContent = "";
-    r.records.slice().reverse().forEach(rec => {
-      const row = document.createElement("div"); row.className = "rec-row";
-      const d = document.createElement("span"); d.className = "d"; d.textContent = dayLabel(rec.date);
-      const v = document.createElement("span"); v.className = "num";
-      v.textContent = "질문 " + rec.asks + " · 메모 " + rec.memos + " · 가림 " + rec.masked_items + "건";
-      row.append(d, v); box.appendChild(row);
-    });
-    if (!r.records.length) box.textContent = "아직 기록이 없습니다.";
-  }catch(e){ /* 기록 표가 비어도 화면은 유지 */ }
 }
+async function loadLog(){ await loadCalendar(); await loadDay(); }
 $("todoForm").addEventListener("submit", async e => {
   e.preventDefault();
   const text = $("todoInput").value.trim(); if (!text) return;
-  try{ const r = await api("/api/worklog/add", {date: logDay, text}); $("todoInput").value = ""; renderTodos(r.items); }
+  try{ const r = await api("/api/worklog/add", {date: logDay, text, time: $("todoTime").value});
+    $("todoInput").value = ""; $("todoTime").value = ""; renderTodos(r.items); loadCalendar(); }
   catch(err){ showErr(err.message); }
 });
-function shiftDay(n){ const [y, m, dd] = logDay.split("-").map(Number);
-  logDay = isoDay(new Date(y, m - 1, dd + n)); loadLog(); }
-$("dayPrev").addEventListener("click", () => shiftDay(-1));
-$("dayNext").addEventListener("click", () => shiftDay(1));
-$("dayToday").addEventListener("click", () => { logDay = isoDay(new Date()); loadLog(); });
+function shiftMonth(n){ const [y, m] = calMonth.split("-").map(Number);
+  const dt = new Date(y, m - 1 + n, 1);
+  calMonth = dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0"); loadCalendar(); }
+$("monPrev").addEventListener("click", () => shiftMonth(-1));
+$("monNext").addEventListener("click", () => shiftMonth(1));
+$("monToday").addEventListener("click", () => { logDay = isoDay(new Date()); calMonth = logDay.slice(0, 7); loadLog(); });
+
+// 문서 뷰어 (통독 + 문서 안에서 찾기)
+let viewerParas = [], viewerMarks = [], viewerIdx = -1;
+async function openViewer(name){
+  const d = await api("/api/docs/preview?name=" + encodeURIComponent(name)).catch(() => null);
+  if (!d) return;
+  viewerParas = d.paras;
+  $("viewerTitle").textContent = name;
+  $("viewerQuery").value = ""; $("viewerCount").textContent = "";
+  paintViewer("");
+  $("viewer").hidden = false;
+  $("viewerQuery").focus();
+}
+function paintViewer(q){
+  const body = $("viewerBody"); body.textContent = ""; viewerMarks = []; viewerIdx = -1;
+  viewerParas.forEach(t => {
+    const p = document.createElement("p");
+    if (!q){ p.textContent = t; }
+    else {
+      const low = t.toLowerCase(), ql = q.toLowerCase(); let i = 0, pos;
+      while ((pos = low.indexOf(ql, i)) >= 0){
+        p.appendChild(document.createTextNode(t.slice(i, pos)));
+        const mk = document.createElement("mark"); mk.textContent = t.slice(pos, pos + q.length);
+        p.appendChild(mk); viewerMarks.push(mk); i = pos + q.length;
+      }
+      p.appendChild(document.createTextNode(t.slice(i)));
+    }
+    body.appendChild(p);
+  });
+  $("viewerCount").textContent = q ? (viewerMarks.length ? "1/" + viewerMarks.length : "0건") : "";
+  if (viewerMarks.length) stepMark(0);
+}
+function stepMark(n){
+  if (!viewerMarks.length) return;
+  viewerMarks.forEach(m => m.classList.remove("cur"));
+  viewerIdx = (n + viewerMarks.length) % viewerMarks.length;
+  const m = viewerMarks[viewerIdx]; m.classList.add("cur");
+  m.scrollIntoView({block: "center"});
+  $("viewerCount").textContent = (viewerIdx + 1) + "/" + viewerMarks.length;
+}
+$("viewerQuery").addEventListener("input", () => paintViewer($("viewerQuery").value.trim()));
+$("viewerQuery").addEventListener("keydown", e => { if (e.key === "Enter"){ e.preventDefault(); stepMark(viewerIdx + 1); } });
+$("viewerNext").addEventListener("click", () => stepMark(viewerIdx + 1));
+$("viewerPrev").addEventListener("click", () => stepMark(viewerIdx - 1));
+$("viewerClose").addEventListener("click", () => { $("viewer").hidden = true; });
+$("viewer").addEventListener("click", e => { if (e.target === $("viewer")) $("viewer").hidden = true; });
+document.addEventListener("keydown", e => { if (e.key === "Escape") $("viewer").hidden = true; });
 
 refreshStatus(); renderRecent(); setInterval(refreshStatus, 20000);
 </script>

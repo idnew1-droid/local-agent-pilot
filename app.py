@@ -16,6 +16,7 @@ Python 표준 라이브러리만으로 동작하므로 폐쇄망 PC에 그대로
 import hashlib
 import json
 import os
+import re
 import threading
 import time
 import urllib.request
@@ -198,6 +199,11 @@ def save_worklog(d):
         pass
 
 
+def sort_items(items):
+    """시간이 있는 일을 시간순으로 앞에, 나머지는 추가한 순서를 지킨다."""
+    return sorted(items, key=lambda it: (0, it["time"]) if it.get("time") else (1, ""))
+
+
 # ---------- 의미 검색 색인 (임베딩, 백그라운드 구축) ----------
 EMBED_CACHE_FILE = os.path.join(BASE_DIR, "embeddings_cache.json")
 EMBED = {"vecs": {}, "ready": False, "building": False}
@@ -378,8 +384,20 @@ class Handler(BaseHTTPRequestHandler):
             d = parse_qs(urlparse(self.path).query).get("date", [""])[0] \
                 or datetime.now().date().isoformat()
             wl = load_worklog()
-            self.send_json({"date": d, "items": wl["days"].get(d, []),
+            self.send_json({"date": d, "items": sort_items(wl["days"].get(d, [])),
                             "counts": log_counts(d)})
+        elif self.path.startswith("/api/calendar"):
+            from urllib.parse import urlparse, parse_qs
+            month = parse_qs(urlparse(self.path).query).get("month", [""])[0] \
+                or datetime.now().strftime("%Y-%m")
+            counts = {d: c for d, c in log_all_counts().items() if d.startswith(month)}
+            wl = load_worklog()
+            todos = {}
+            for d, items in wl["days"].items():
+                if d.startswith(month) and items:
+                    todos[d] = {"total": len(items),
+                                "done": sum(1 for it in items if it["done"])}
+            self.send_json({"month": month, "counts": counts, "todos": todos})
         elif self.path.startswith("/api/records"):
             from urllib.parse import urlparse, parse_qs
             from datetime import timedelta
@@ -420,13 +438,17 @@ class Handler(BaseHTTPRequestHandler):
                 if not text:
                     self.send_json({"error": "할 일을 입력해 주세요."}, 400)
                     return
+                t = (data.get("time") or "").strip()
+                if t and not re.match(r"^\d{2}:\d{2}$", t):
+                    t = ""
                 wl = load_worklog()
                 wl["seq"] += 1
-                item = {"id": wl["seq"], "text": text, "done": False}
+                item = {"id": wl["seq"], "text": text, "done": False, "time": t}
                 wl["days"].setdefault(d, []).append(item)
                 save_worklog(wl)
-                self.send_json({"item": item, "items": wl["days"][d]})
-            elif self.path in ("/api/worklog/toggle", "/api/worklog/delete"):
+                self.send_json({"item": item, "items": sort_items(wl["days"][d])})
+            elif self.path in ("/api/worklog/toggle", "/api/worklog/delete",
+                               "/api/worklog/move"):
                 d = data.get("date") or datetime.now().date().isoformat()
                 wl = load_worklog()
                 items = wl["days"].get(d, [])
@@ -434,11 +456,17 @@ class Handler(BaseHTTPRequestHandler):
                     for it in items:
                         if it["id"] == data.get("id"):
                             it["done"] = not it["done"]
-                else:
+                elif self.path.endswith("delete"):
                     items = [it for it in items if it["id"] != data.get("id")]
                     wl["days"][d] = items
+                else:  # move: 다른 날짜로 옮기기 (내일로 미루기)
+                    to = (data.get("to") or "").strip()
+                    moving = [it for it in items if it["id"] == data.get("id")]
+                    if to and moving:
+                        wl["days"][d] = [it for it in items if it["id"] != data.get("id")]
+                        wl["days"].setdefault(to, []).extend(moving)
                 save_worklog(wl)
-                self.send_json({"items": wl["days"].get(d, [])})
+                self.send_json({"items": sort_items(wl["days"].get(d, []))})
             elif self.path == "/api/summarize":
                 self.handle_summarize(data)
             elif self.path == "/api/docs/upload":
