@@ -224,6 +224,116 @@ def day_items(wl, d):
     return sort_items(items)
 
 
+# ---------- 긴 문서 작업 (정리본·발표자료, 백그라운드 단계 처리) ----------
+JOBS = {}
+JOB_LOCK = threading.Lock()
+JOB_SEQ = [0]
+
+ORGANIZE_SYSTEM = ("너는 창구 업무 문서를 정리하는 도우미다. 주어진 문서를 창구에서 바로 찾아 쓰기 좋은 "
+                   "정리본으로 재구성한다. 문서에 없는 내용은 절대 쓰지 않는다. 한국어로 쓴다.")
+ORGANIZE_GUIDE = ("다음 구성으로 정리본을 만들어라. 해당 내용이 문서에 없으면 그 항목은 빼라.\n"
+                  "## 한눈에\n(한두 문장 개요)\n"
+                  "## 핵심만\n(꼭 알아야 할 것, 목록)\n"
+                  "## 절차\n(순서가 있는 일이면 번호 목록)\n"
+                  "## 주의·금지\n(하면 안 되는 것, 확인 사항)\n"
+                  "## 헷갈리는 용어\n(용어 = 쉬운 뜻)\n\n문서:\n")
+EXTRACT_SYSTEM = ("너는 큰 문서의 일부를 발췌하는 도우미다. 주어진 부분에서 핵심 사실, 절차, 수치, "
+                  "주의사항만 빠짐없이 뽑는다. 없는 내용은 쓰지 않는다. 목록 위주로 짧게 쓴다.")
+
+
+def gen_text(msgs, model):
+    if external_active():
+        return external_chat(msgs)
+    with STATE["chat_lock"]:
+        use_model(model)
+        return agent.chat(msgs)
+
+
+def doc_parts(name, size=3200):
+    """문서 전문을 단락 경계에서 약 size자 묶음으로 나눈다."""
+    text = agent.read_doc_text(os.path.join(agent.DOCS_DIR, name))
+    parts, cur = [], ""
+    for p in agent._split_paras(text):
+        if cur and len(cur) + len(p) > size:
+            parts.append(cur)
+            cur = p
+        else:
+            cur = cur + "\n\n" + p if cur else p
+    if cur:
+        parts.append(cur)
+    return parts
+
+
+def job_source(job, name):
+    """작업의 재료 텍스트. 짧으면 전문, 길면 조각별 발췌를 합친 것."""
+    parts = doc_parts(name)
+    if len(parts) <= 1:
+        job["total"] = 1
+        job["step"] = 1
+        return parts[0] if parts else ""
+    job["total"] = len(parts) + 1
+    extracts = []
+    for i, part in enumerate(parts):
+        job["step"] = i + 1
+        extracts.append(gen_text(
+            [{"role": "system", "content": EXTRACT_SYSTEM},
+             {"role": "user", "content": part}], STATE["memo_model"]))
+    job["step"] = len(parts) + 1
+    return "\n\n".join(extracts)
+
+
+def run_job(job):
+    name = job["name"]
+    try:
+        source = job_source(job, name)
+        if job["kind"] == "organize":
+            text = gen_text([{"role": "system", "content": ORGANIZE_SYSTEM},
+                             {"role": "user", "content": ORGANIZE_GUIDE + source}],
+                            STATE["qa_model"])
+            out_dir = os.path.join(BASE_DIR, "정리본")
+            os.makedirs(out_dir, exist_ok=True)
+            out_name = os.path.splitext(name)[0] + "_정리본.md"
+            try:
+                with open(os.path.join(out_dir, out_name), "w", encoding="utf-8") as f:
+                    f.write("# " + out_name + "\n\n" + text)
+            except OSError:
+                out_name = ""
+            append_log({"type": "organize"})
+            job.update(state="done", text=text, saved=out_name)
+        else:  # slides
+            raw = gen_text(
+                [{"role": "system", "content":
+                  "너는 발표자료를 만드는 도우미다. 주어진 내용만으로 슬라이드 개요를 만든다. "
+                  "없는 내용은 쓰지 않는다. 출력은 JSON만, 설명 문장 없이."},
+                 {"role": "user", "content":
+                  "다음 내용으로 발표 슬라이드 8~12장을 만들어라. 형식: "
+                  "{\"slides\": [{\"title\": \"장 제목\", \"bullets\": [\"핵심 한 줄\", ...]}]}. "
+                  "장마다 bullet 3~4개, 한 줄씩 짧게.\n\n" + source}],
+                STATE["qa_model"])
+            m = re.search(r"\{.*\}", raw, re.S)
+            slides = json.loads(m.group(0))["slides"] if m else []
+            slides = [{"title": str(s.get("title", "")), 
+                       "bullets": [str(b) for b in s.get("bullets", [])]}
+                      for s in slides if isinstance(s, dict)]
+            if not slides:
+                raise RuntimeError("발표자료 개요를 만들지 못했습니다. 다시 시도해 주세요.")
+            append_log({"type": "slides"})
+            job.update(state="done", slides=slides)
+    except RuntimeError as e:
+        job.update(state="error", error=str(e))
+    except Exception as e:
+        job.update(state="error", error=f"처리 중 오류가 발생했습니다: {e}")
+
+
+def start_job(kind, name):
+    with JOB_LOCK:
+        JOB_SEQ[0] += 1
+        jid = JOB_SEQ[0]
+        JOBS[jid] = {"kind": kind, "name": name, "state": "working", "step": 0, "total": 0}
+    threading.Thread(target=run_job, args=(JOBS[jid],), daemon=True).start()
+    return jid
+
+
 # ---------- 의미 검색 색인 (임베딩, 백그라운드 구축) ----------
 EMBED_CACHE_FILE = os.path.join(BASE_DIR, "embeddings_cache.json")
 EMBED = {"vecs": {}, "ready": False, "building": False}
@@ -391,6 +501,19 @@ class Handler(BaseHTTPRequestHandler):
                              "enabled": external_active(),
                              "has_key": bool(SETTINGS["external"]["api_key"])},
             })
+        elif self.path.startswith("/api/job"):
+            from urllib.parse import urlparse, parse_qs
+            jid = parse_qs(urlparse(self.path).query).get("job", [""])[0]
+            job = JOBS.get(int(jid)) if jid.isdigit() else None
+            if job is None:
+                self.send_json({"error": "작업을 찾을 수 없습니다."}, 404)
+                return
+            out = {"state": job["state"], "step": job.get("step", 0),
+                   "total": job.get("total", 0), "kind": job["kind"]}
+            for k in ("text", "saved", "slides", "error"):
+                if k in job:
+                    out[k] = job[k]
+            self.send_json(out)
         elif self.path == "/api/docs":
             docs = self.doc_summary()
             self.send_json({"docs": [{"name": k, "paras": v} for k, v in sorted(docs.items())]})
@@ -519,6 +642,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"items": day_items(wl, d)})
             elif self.path == "/api/organize":
                 self.handle_organize(data)
+            elif self.path == "/api/slides":
+                self.handle_slides(data)
             elif self.path == "/api/summarize":
                 self.handle_summarize(data)
             elif self.path == "/api/docs/upload":
@@ -543,8 +668,16 @@ class Handler(BaseHTTPRequestHandler):
             return
         masked_q, found = agent.mask_text(q, SETTINGS["mask_level"])
         STATE["counters"]["masked_items"] += len(found)
+        # 이어서 묻기: 이전 질문을 검색에 함께 넣고, 이전 답변은 지시어 해석용으로만 쓴다
+        ctx = data.get("context") or {}
+        prev_q_m, prev_a_m = "", ""
+        if (ctx.get("q") or "").strip():
+            prev_q_m, _ = agent.mask_text(ctx["q"].strip(), SETTINGS["mask_level"])
+            prev_a_m, _ = agent.mask_text((ctx.get("a") or "").strip()[:600],
+                                          SETTINGS["mask_level"])
+        search_q = (prev_q_m + " " + masked_q).strip() if prev_q_m else masked_q
         with STATE["lock"]:
-            hits = hybrid_retrieve(STATE["chunks"], masked_q)
+            hits = hybrid_retrieve(STATE["chunks"], search_q)
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
@@ -569,9 +702,16 @@ class Handler(BaseHTTPRequestHandler):
                                    "text": h["text"]} for h in hits]})
         emit(meta)
         context = "\n\n".join(f"[근거:{h['source']}] {h['text']}" for h in hits)
+        if prev_q_m:
+            user_content = (f"이전 질문: {prev_q_m}\n이전 답변: {prev_a_m}\n\n{context}\n\n"
+                            f"후속 질문: {masked_q}\n"
+                            "(후속 질문의 '그것' 같은 지시어는 이전 대화를 참고해 해석하되, "
+                            "답의 근거는 위 근거만 쓴다.)")
+        else:
+            user_content = f"{context}\n\n질문: {masked_q}"
         msgs = [
             {"role": "system", "content": agent.SYSTEM},
-            {"role": "user", "content": f"{context}\n\n질문: {masked_q}"},
+            {"role": "user", "content": user_content},
         ]
         started = time.time()
         try:
@@ -594,44 +734,22 @@ class Handler(BaseHTTPRequestHandler):
             emit({"type": "error", "message": str(e)})
 
     def handle_organize(self, data):
-        """업무 문서(매뉴얼)를 창구에서 바로 찾아 쓰기 좋은 정리본으로 재구성한다."""
+        """정리본 생성을 백그라운드로 시작하고 job id를 돌려준다 (긴 문서 대응)."""
         name = os.path.basename(data.get("name") or "")
-        if not name.endswith((".txt", ".md")):
-            self.send_json({"error": "정리본을 만들 문서가 아닙니다."}, 400)
-            return
-        path = os.path.join(agent.DOCS_DIR, name)
-        if not os.path.isfile(path):
+        if not name.lower().endswith(agent.DOC_EXTS) or \
+                not os.path.isfile(os.path.join(agent.DOCS_DIR, name)):
             self.send_json({"error": "문서를 찾을 수 없습니다."}, 404)
             return
-        with open(path, encoding="utf-8", errors="replace") as f:
-            full = f.read()
-        truncated = len(full) > 7000
-        system = ("너는 창구 업무 문서를 정리하는 도우미다. 주어진 문서를 창구에서 바로 찾아 쓰기 좋은 "
-                  "정리본으로 재구성한다. 문서에 없는 내용은 절대 쓰지 않는다. 한국어로 쓴다.")
-        guide = ("다음 구성으로 정리본을 만들어라. 해당 내용이 문서에 없으면 그 항목은 빼라.\n"
-                 "## 한눈에\n(한두 문장 개요)\n"
-                 "## 핵심만\n(꼭 알아야 할 것, 목록)\n"
-                 "## 절차\n(순서가 있는 일이면 번호 목록)\n"
-                 "## 주의·금지\n(하면 안 되는 것, 확인 사항)\n"
-                 "## 헷갈리는 용어\n(용어 = 쉬운 뜻)\n\n문서:\n") + full[:7000]
-        msgs = [{"role": "system", "content": system}, {"role": "user", "content": guide}]
-        if external_active():
-            text = external_chat(msgs)
-        else:
-            with STATE["chat_lock"]:
-                use_model(STATE["qa_model"])
-                text = agent.chat(msgs)
-        out_dir = os.path.join(BASE_DIR, "정리본")
-        os.makedirs(out_dir, exist_ok=True)
-        out_name = os.path.splitext(name)[0] + "_정리본.md"
-        try:
-            with open(os.path.join(out_dir, out_name), "w", encoding="utf-8") as f:
-                f.write("# " + out_name + "\n\n" + text)
-        except OSError:
-            out_name = ""
-        append_log({"type": "organize"})
-        self.send_json({"name": name, "text": text, "saved": out_name,
-                        "truncated": truncated})
+        self.send_json({"job": start_job("organize", name)})
+
+    def handle_slides(self, data):
+        """발표자료 생성을 백그라운드로 시작한다."""
+        name = os.path.basename(data.get("name") or "")
+        if not name.lower().endswith(agent.DOC_EXTS) or \
+                not os.path.isfile(os.path.join(agent.DOCS_DIR, name)):
+            self.send_json({"error": "문서를 찾을 수 없습니다."}, 404)
+            return
+        self.send_json({"job": start_job("slides", name)})
 
     def handle_summarize(self, data):
         masked, found = agent.mask_text(data.get("text", ""), SETTINGS["mask_level"])
@@ -675,16 +793,38 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_upload(self, data):
         name = os.path.basename((data.get("name") or "").strip())
-        content = data.get("content") or ""
-        if not name.endswith((".txt", ".md")) or not content.strip():
-            self.send_json({"error": "txt 또는 md 파일과 내용이 필요합니다."}, 400)
+        if not name.lower().endswith(agent.DOC_EXTS):
+            self.send_json({"error": "txt, md, docx, pptx, pdf 파일만 올릴 수 있습니다."}, 400)
             return
         os.makedirs(agent.DOCS_DIR, exist_ok=True)
-        with open(os.path.join(agent.DOCS_DIR, name), "w", encoding="utf-8") as f:
-            f.write(content)
+        path = os.path.join(agent.DOCS_DIR, name)
+        if data.get("content_b64"):
+            import base64
+            try:
+                raw = base64.b64decode(data["content_b64"])
+            except Exception:
+                self.send_json({"error": "파일을 읽지 못했습니다."}, 400)
+                return
+            with open(path, "wb") as f:
+                f.write(raw)
+        else:
+            content = data.get("content") or ""
+            if not content.strip():
+                self.send_json({"error": "내용이 필요합니다."}, 400)
+                return
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
         with STATE["lock"]:
             STATE["chunks"] = agent.load_chunks()
         build_embeddings()
+        if not any(c["source"] == name for c in STATE["chunks"]):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            self.send_json({"error": "파일에서 글자를 뽑지 못했습니다. "
+                                     "스캔한 이미지 문서는 글자 추출이 안 됩니다."}, 400)
+            return
         self.send_json({"ok": True, "doc_chunks": len(STATE["chunks"])})
 
 

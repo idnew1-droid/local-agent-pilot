@@ -21,6 +21,9 @@ import os
 import re
 import sys
 import urllib.request
+import zipfile
+import zlib
+import xml.etree.ElementTree as ET
 from collections import Counter
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -100,17 +103,238 @@ def cosine(a, b):
     return dot / (na * nb) if na and nb else 0.0
 
 
+DOC_EXTS = (".txt", ".md", ".docx", ".pptx", ".pdf")
+
+
+def _split_paras(text):
+    return [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+
+
+def extract_docx(path):
+    """docx = zip + XML. 단락(w:p)마다 줄을 뽑는다. 표준 라이브러리만으로 처리."""
+    with zipfile.ZipFile(path) as z:
+        xml = z.read("word/document.xml")
+    root = ET.fromstring(xml)
+    ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    paras = []
+    for p in root.iter(ns + "p"):
+        t = "".join(node.text or "" for node in p.iter(ns + "t"))
+        if t.strip():
+            paras.append(t.strip())
+    return "\n\n".join(paras)
+
+
+def extract_pptx(path):
+    """pptx = zip + 슬라이드 XML. 슬라이드를 단락 하나로, 안의 줄은 줄바꿈으로 잇는다."""
+    ns = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    with zipfile.ZipFile(path) as z:
+        names = [n for n in z.namelist()
+                 if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)]
+        names.sort(key=lambda n: int(re.search(r"(\d+)\.xml$", n).group(1)))
+        slides = []
+        for n in names:
+            root = ET.fromstring(z.read(n))
+            lines = []
+            for p in root.iter(ns + "p"):
+                t = "".join(node.text or "" for node in p.iter(ns + "t"))
+                if t.strip():
+                    lines.append(t.strip())
+            if lines:
+                slides.append("\n".join(lines))
+    return "\n\n".join(slides)
+
+
+def _pdf_objects(data):
+    """간접 객체 번호 → (사전 본문, 풀린 스트림). 객체 스트림(ObjStm) 속 객체는 대상 외."""
+    objs = {}
+    for m in re.finditer(rb"(\d+)\s+(\d+)\s+obj\b", data):
+        end = data.find(b"endobj", m.end())
+        if end < 0:
+            continue
+        body = data[m.end():end]
+        stream = None
+        sm = re.search(rb"stream\r?\n", body)
+        if sm:
+            send = body.find(b"endstream", sm.end())
+            if send >= 0:
+                raw = body[sm.end():send].rstrip(b"\r\n")
+                try:
+                    stream = zlib.decompress(raw)
+                except zlib.error:
+                    stream = raw
+            body = body[:sm.start()]
+        objs[int(m.group(1))] = (body, stream)
+    return objs
+
+
+def _cmap_parse(stream):
+    """ToUnicode CMap 하나를 {코드: 글자}와 코드 바이트 수로 푼다."""
+    t = stream.decode("latin-1")
+    size = 2
+    m = re.search(r"begincodespacerange(.*?)endcodespacerange", t, re.S)
+    if m:
+        first = re.search(r"<([0-9A-Fa-f]+)>", m.group(1))
+        if first:
+            size = max(1, len(first.group(1)) // 2)
+    cmap = {}
+
+    def uni(hexs):
+        try:
+            return bytes.fromhex(hexs).decode("utf-16-be", "replace")
+        except ValueError:
+            return ""
+
+    for sec in re.findall(r"beginbfchar(.*?)endbfchar", t, re.S):
+        for src, dst in re.findall(r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>", sec):
+            cmap[int(src, 16)] = uni(dst)
+    for sec in re.findall(r"beginbfrange(.*?)endbfrange", t, re.S):
+        for lo, hi, dst in re.findall(
+                r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>", sec):
+            lo_i, hi_i, d = int(lo, 16), int(hi, 16), int(dst, 16)
+            for code in range(lo_i, min(hi_i, lo_i + 1024) + 1):
+                cmap.setdefault(code, chr(d + code - lo_i))
+        for lo, hi, arr in re.findall(
+                r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*\[([^\]]*)\]", sec):
+            lo_i = int(lo, 16)
+            for j, dst in enumerate(re.findall(r"<([0-9A-Fa-f]+)>", arr)):
+                cmap[lo_i + j] = uni(dst)
+    return cmap, size
+
+
+def _pdf_decode(raw, cmap, size):
+    chars = []
+    if size == 2:
+        units = [(raw[i] << 8) | raw[i + 1] for i in range(0, len(raw) - 1, 2)]
+    else:
+        units = list(raw)
+    for u in units:
+        if u in cmap:
+            chars.append(cmap[u])
+        elif u < 128:
+            chars.append(chr(u))
+    return "".join(chars)
+
+
+def _pdf_lines_from_objects(objs):
+    """폰트별 ToUnicode를 연결해 페이지 내용 스트림을 글자로 복원한다."""
+    fonts = {}
+    for num, (body, stream) in objs.items():
+        m = re.search(rb"/ToUnicode\s+(\d+)\s+\d+\s+R", body)
+        if m and int(m.group(1)) in objs and objs[int(m.group(1))][1]:
+            fonts[num] = _cmap_parse(objs[int(m.group(1))][1])
+    if not fonts:
+        return []
+    name2font = {}
+    for num, (body, stream) in objs.items():
+        for fm in re.finditer(rb"/Font\s*<<(.*?)>>", body, re.S):
+            for name, ref in re.findall(rb"/(\w+)\s+(\d+)\s+\d+\s+R", fm.group(1)):
+                if int(ref) in fonts:
+                    name2font[name.decode("latin-1")] = fonts[int(ref)]
+    token = re.compile(r"/(\w+)\s+([\d.]+)\s+Tf|<([0-9A-Fa-f\s]+)>|"
+                       r"\(((?:\\.|[^\\,)])*)\)|([-\d.]+)\s+([-\d.]+)\s+(?:Td|TD)|\bT\*\b")
+    lines = []
+    for num, (body, stream) in objs.items():
+        if b"/Type" not in body or b"/Page" not in body or b"/Pages" in body:
+            continue
+        contents = []
+        cm = re.search(rb"/Contents\s+(\d+)\s+\d+\s+R", body)
+        if cm and int(cm.group(1)) in objs:
+            contents = [objs[int(cm.group(1))][1]]
+        else:
+            am = re.search(rb"/Contents\s*\[([^\]]*)\]", body)
+            if am:
+                contents = [objs[int(r)][1] for r in
+                            re.findall(rb"(\d+)\s+\d+\s+R", am.group(1))
+                            if int(r) in objs]
+        for content in contents:
+            if not content or b"BT" not in content:
+                continue
+            text = content.decode("latin-1")
+            cur_font = (None, 2)
+            font_pt = 0.0
+            for block in re.findall(r"BT(.*?)ET", text, re.S):
+                cur = ""
+                space_next = False
+                for m in token.finditer(block):
+                    if m.group(1):
+                        cur_font = name2font.get(m.group(1), cur_font)
+                        try:
+                            font_pt = float(m.group(2))
+                        except ValueError:
+                            pass
+                    elif m.group(5) is not None:
+                        tx, ty = float(m.group(5)), float(m.group(6))
+                        if ty != 0:
+                            if cur.strip():
+                                lines.append(cur.strip())
+                            cur = ""
+                        elif font_pt and 0 < tx < 0.5 * font_pt:
+                            space_next = True  # 글자 폭보다 좁은 이동 = 단어 사이 띄움
+                    elif m.group(0) == "T*":
+                        if cur.strip():
+                            lines.append(cur.strip())
+                        cur = ""
+                    elif m.group(3) is not None or m.group(4) is not None:
+                        if space_next and cur and not cur.endswith(" "):
+                            cur += " "
+                        space_next = False
+                        cmap, csize = cur_font[0] or {}, cur_font[1]
+                        if m.group(3) is not None:
+                            try:
+                                cur += _pdf_decode(bytes.fromhex(
+                                    re.sub(r"\s+", "", m.group(3))), cmap, csize)
+                            except ValueError:
+                                pass
+                        else:
+                            raw = m.group(4).encode("latin-1").decode(
+                                "unicode_escape").encode("latin-1")
+                            cur += _pdf_decode(raw, cmap, csize)
+                if cur.strip():
+                    lines.append(cur.strip())
+    return lines
+
+
+def extract_pdf(path):
+    """텍스트가 들어 있는 PDF에서 글자를 뽑는다 (표준 라이브러리만으로).
+    폰트별 ToUnicode CMap을 연결하는 방식이라 Word·브라우저가 만든 PDF의 한글도 복원한다.
+    스캔 이미지 PDF는 글자가 없어 빈 결과가 된다."""
+    with open(path, "rb") as f:
+        data = f.read()
+    lines = _pdf_lines_from_objects(_pdf_objects(data))
+    # 너무 짧은 줄은 앞줄에 이어 붙인다 (PDF 줄바꿈이 문장 중간에서 끊기는 일이 많아서)
+    merged = []
+    for ln in lines:
+        if merged and len(ln) < 12 and not merged[-1].endswith((".", "다", "요", ":", ")", "음")):
+            merged[-1] += " " + ln
+        else:
+            merged.append(ln)
+    return "\n\n".join(merged)
+
+
+def read_doc_text(path):
+    ext = os.path.splitext(path)[1].lower()
+    try:
+        if ext == ".docx":
+            return extract_docx(path)
+        if ext == ".pptx":
+            return extract_pptx(path)
+        if ext == ".pdf":
+            return extract_pdf(path)
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except Exception:
+        return ""
+
+
 def load_chunks():
     chunks = []
     if not os.path.isdir(DOCS_DIR):
         return chunks
     for name in sorted(os.listdir(DOCS_DIR)):
-        if not name.endswith((".txt", ".md")):
+        if not name.lower().endswith(DOC_EXTS):
             continue
-        with open(os.path.join(DOCS_DIR, name), encoding="utf-8") as f:
-            text = f.read()
-        paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
-        for i, p in enumerate(paras):
+        text = read_doc_text(os.path.join(DOCS_DIR, name))
+        for i, p in enumerate(_split_paras(text)):
             chunks.append({"source": name, "idx": i, "text": p, "vec": ngrams(p)})
     return chunks
 
