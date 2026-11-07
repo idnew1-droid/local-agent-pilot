@@ -438,8 +438,10 @@
         <div class="set-panel">
           <label for="qaModelSel">질문 답변 모델</label>
           <select id="qaModelSel"></select>
+          <p class="desc" id="qaModelHint" style="margin:4px 0 12px"></p>
           <label for="memoModelSel">메모 요약 모델</label>
           <select id="memoModelSel"></select>
+          <p class="desc" id="memoModelHint" style="margin:4px 0 12px"></p>
           <button class="btn sm" id="modelApply" type="button">적용</button>
         </div>
       </div>
@@ -591,9 +593,11 @@ async function refreshStatus(){
     $("setTodayMemos").textContent = (s.today?.memos ?? 0) + "건";
     const fill = (id, val) => { const sel = $(id);
       if (!sel.options.length){ (s.models.length ? s.models : [val]).forEach(mn => {
-        const o = document.createElement("option"); o.value = mn; o.textContent = mn; sel.appendChild(o); }); }
+        const o = document.createElement("option"); o.value = mn;
+        o.textContent = mn + (MODEL_TAGS[mn] ? " · " + MODEL_TAGS[mn] : ""); sel.appendChild(o); }); }
       sel.value = val; };
     fill("qaModelSel", s.qa_model); fill("memoModelSel", s.memo_model);
+    updateModelHints();
     if (!s.ollama) showErr("AI 엔진(Ollama)이 실행되고 있지 않습니다. 시작 메뉴에서 Ollama를 실행하거나, 실행.bat으로 다시 시작해 주세요.");
     else hideErr();
     renderDocs();
@@ -811,7 +815,24 @@ $("sumBtn").addEventListener("click", () => runMemo(true));
 $("copyMask").addEventListener("click", () => navigator.clipboard.writeText(lastMasked));
 $("copySum").addEventListener("click", () => navigator.clipboard.writeText(lastSummary));
 
-// 설정
+// 설정 — 모델 설명
+const MODEL_TAGS = {"exaone3.5:2.4b": "가볍고 빠름", "exaone3.5:7.8b": "크고 정확함", "bge-m3": "검색 전용"};
+const MODEL_NOTES = {
+  "exaone3.5:2.4b": "가벼운 모델 — 답이 빠릅니다. 간단한 질문, 짧은 메모 요약에 맞아요. 복잡하게 따져야 하는 일은 서툴 수 있어요.",
+  "exaone3.5:7.8b": "큰 모델 — 복잡한 질문, 긴 문서 정리처럼 깊이 생각할 일에 맞아요. 답이 조금 느립니다.",
+  "bge-m3": "검색 전용 모델입니다. 문서 찾기에만 쓰고 대화에는 쓰지 않아요."
+};
+function updateModelHints(){
+  [["qaModelSel", "qaModelHint"], ["memoModelSel", "memoModelHint"]].forEach(([selId, hintId]) => {
+    const sel = $(selId), hint = $(hintId); if (!sel || !hint) return;
+    const v = sel.value;
+    hint.textContent = MODEL_NOTES[v] ||
+      (v ? "이름의 숫자(2.4b, 7.8b 같은)가 클수록 복잡한 일을 잘하고, 작을수록 빠릅니다." : "");
+  });
+}
+$("qaModelSel").addEventListener("change", updateModelHints);
+$("memoModelSel").addEventListener("change", updateModelHints);
+
 $("modelApply").addEventListener("click", async () => {
   try{ await api("/api/model", {qa_model: $("qaModelSel").value, memo_model: $("memoModelSel").value}); refreshStatus(); }
   catch(e){ showErr(e.message); }
