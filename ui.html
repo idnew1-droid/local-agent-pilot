@@ -179,6 +179,8 @@
   .rec-row:last-child{border-bottom:0}
   .rec-row .d{color:var(--muted);flex:none}
   .todo .tm{font-size:12.5px;color:var(--hue);font-weight:700;min-width:44px;flex:none}
+  .composer select{border:1px solid var(--border);border-radius:var(--radius-control);
+    background:var(--surface);color:var(--text);padding:10px 8px;font:inherit}
   .cal-head,.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
   .cal-head span{text-align:center;font-size:12px;color:var(--muted);padding:4px 0}
   .cal-day{min-height:66px;border:1px solid var(--rule);border-radius:6px;padding:5px 7px;
@@ -191,6 +193,14 @@
   .cal-day.today .dn{color:var(--hue)}
   .cal-day.sel{outline:2px solid var(--hue);outline-offset:-2px}
   .ans{line-height:1.75}
+  .ans h4{font-size:15px;margin:14px 0 6px}
+  .ans h4:first-child{margin-top:0}
+  .evidence .ev-btn{display:block;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--rule);
+    padding:8px 2px;font:inherit;font-size:13px;color:var(--muted);cursor:pointer;line-height:1.6}
+  .evidence .ev-btn:hover{color:var(--hue)}
+  .evidence .ev-btn .from{color:var(--hue);font-weight:600}
+  .viewer-body p.jump{background:#eef3fa;border-radius:4px;padding:2px 6px;margin-left:-6px}
+  [data-theme="dark"] .viewer-body p.jump{background:#22344d}
   .ans p{margin:0 0 10px}
   .ans p:last-child{margin-bottom:0}
   .ans ul,.ans ol{margin:0 0 10px;padding-left:22px}
@@ -395,19 +405,23 @@
         <p class="desc" id="weekLine" style="margin-top:12px"></p>
       </div>
 
-      <div class="title-row"><h3 id="dayTitle" style="font-size:17px"></h3></div>
-      <div class="panel stats" role="group" aria-label="그날 처리 건수" style="grid-template-columns:repeat(3,1fr)">
+      <div class="title-row" id="dayHead"><h3 id="dayTitle" style="font-size:17px"></h3>
+        <span class="scope"><button class="mini-btn" id="printDay" type="button">일지 인쇄</button></span></div>
+      <div class="panel stats" id="dayStats" role="group" aria-label="그날 처리 건수" style="grid-template-columns:repeat(3,1fr)">
         <div class="stat"><div class="lb">답한 질문</div><div class="vl big num" id="lgAsks">-</div></div>
         <div class="stat"><div class="lb">정리한 메모</div><div class="vl big num" id="lgMemos">-</div></div>
         <div class="stat"><div class="lb">가린 개인정보</div><div class="vl big num" id="lgMasked">-</div></div>
       </div>
 
-      <div class="panel" style="padding:18px 20px">
+      <div class="panel" id="dayTodos" style="padding:18px 20px">
         <div class="result-head"><h3>일정 · 할 일</h3></div>
         <div id="todoList"></div>
         <form class="composer" id="todoForm" style="margin-top:12px">
           <input type="time" id="todoTime" aria-label="시간 (선택)" style="flex:0 0 118px">
           <input id="todoInput" type="text" placeholder="할 일을 적고 Enter (시간은 선택)" autocomplete="off" aria-label="할 일 입력">
+          <select id="todoRepeat" aria-label="반복" style="flex:0 0 104px">
+            <option value="">반복 없음</option><option value="daily">매일</option><option value="weekly">매주</option>
+          </select>
           <button class="btn secondary" type="submit">추가</button>
         </form>
       </div>
@@ -518,6 +532,21 @@
   </div>
 </div>
 
+<div class="viewer" id="orgOverlay" hidden role="dialog" aria-modal="true" aria-label="문서 정리본">
+  <div class="viewer-box">
+    <div class="viewer-head">
+      <h3 id="orgTitle"></h3>
+      <span class="scope">
+        <button class="mini-btn" id="orgPrint" type="button">인쇄</button>
+        <button class="mini-btn" id="orgCopy" type="button">복사</button>
+        <button class="mini-btn" id="orgClose" type="button">닫기</button>
+      </span>
+    </div>
+    <div class="viewer-body ans" id="orgBody"></div>
+    <p class="desc" id="orgNote" style="padding:2px 18px 14px"></p>
+  </div>
+</div>
+
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -575,11 +604,15 @@ async function renderDocs(){
   const dl = await api("/api/docs").catch(() => ({docs:[]}));
   const list = $("docList"); list.textContent = "";
   dl.docs.forEach(d => {
-    const row = document.createElement("button"); row.className = "doc-row"; row.type = "button";
+    const row = document.createElement("div"); row.className = "doc-row";
     const nm = document.createElement("span"); nm.className = "nm"; nm.textContent = d.name;
-    const ct = document.createElement("span"); ct.className = "ct num"; ct.textContent = d.paras + "단락 · 읽기";
-    row.append(nm, ct);
-    row.addEventListener("click", () => openViewer(d.name));
+    nm.style.cursor = "pointer"; nm.title = "문서 읽기";
+    nm.addEventListener("click", () => openViewer(d.name));
+    const ct = document.createElement("span"); ct.className = "ct num"; ct.textContent = d.paras + "단락";
+    const og = document.createElement("button"); og.className = "mini-btn"; og.type = "button"; og.textContent = "정리본";
+    og.title = "이 문서를 보기 좋은 정리본으로 만들기";
+    og.addEventListener("click", () => openOrganize(d.name, og));
+    row.append(nm, ct, og);
     list.appendChild(row);
   });
   if (!dl.docs.length) list.innerHTML = '<p class="hint" style="font-size:12.5px;color:var(--muted);padding:0 8px">아직 문서가 없습니다.</p>';
@@ -666,7 +699,15 @@ $("askForm").addEventListener("submit", async e => {
       foot.append(evBtn, cpBtn, prBtn); ex.appendChild(foot);
       prBtn.addEventListener("click", () => printOnly([ex]));
       const evBox = document.createElement("div"); evBox.className = "evidence";
-      (meta.evidence || []).forEach(t => { const p = document.createElement("p"); p.textContent = t; evBox.appendChild(p); });
+      (meta.evidence || []).forEach(ev => {
+        const t = typeof ev === "string" ? ev : ev.text;
+        const b = document.createElement("button"); b.type = "button"; b.className = "ev-btn";
+        const from = document.createElement("span"); from.className = "from";
+        from.textContent = typeof ev === "string" ? "" : (ev.source + " · ");
+        b.append(from, document.createTextNode(t));
+        if (typeof ev !== "string") b.addEventListener("click", () => openViewer(ev.source, ev.idx));
+        evBox.appendChild(b);
+      });
       ex.appendChild(evBox);
       evBtn.addEventListener("click", () => evBox.classList.toggle("open"));
       cpBtn.addEventListener("click", () => navigator.clipboard.writeText(body.textContent));
@@ -720,9 +761,11 @@ function renderRich(text){
   const inline = s => esc(s).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
   for (const raw of lines){
     const line = raw.trimEnd();
+    const mH = line.match(/^#{2,3}\s+(.*)$/);
     const mUl = line.match(/^\s*[-•·]\s+(.*)$/);
     const mOl = line.match(/^\s*\d+[.)]\s+(.*)$/);
-    if (mUl){ if (list !== "ul"){ closeList(); html += "<ul>"; list = "ul"; } html += "<li>" + inline(mUl[1]) + "</li>"; }
+    if (mH){ closeList(); html += "<h4>" + inline(mH[1]) + "</h4>"; }
+    else if (mUl){ if (list !== "ul"){ closeList(); html += "<ul>"; list = "ul"; } html += "<li>" + inline(mUl[1]) + "</li>"; }
     else if (mOl){ if (list !== "ol"){ closeList(); html += "<ol>"; list = "ol"; } html += "<li>" + inline(mOl[1]) + "</li>"; }
     else if (!line.trim()){ closeList(); }
     else { closeList(); html += "<p>" + inline(line.trim()) + "</p>"; }
@@ -873,15 +916,27 @@ function renderTodos(items){
       const r = await api("/api/worklog/toggle", {date: logDay, id: it.id}); renderTodos(r.items); loadCalendar(); });
     if (it.time){ const tm = document.createElement("span"); tm.className = "tm num"; tm.textContent = it.time; row.appendChild(tm); }
     const tx = document.createElement("span"); tx.className = "tx"; tx.textContent = it.text;
-    const mv = document.createElement("button"); mv.className = "mini-btn"; mv.type = "button"; mv.textContent = "내일로";
-    mv.addEventListener("click", async () => {
-      const [yy, mo, dd] = logDay.split("-").map(Number);
-      const to = isoDay(new Date(yy, mo - 1, dd + 1));
-      const r = await api("/api/worklog/move", {date: logDay, id: it.id, to}); renderTodos(r.items); loadCalendar(); });
+    const parts = [cb, tx];
+    if (it.repeat){ const tg = document.createElement("span"); tg.className = "tm"; tg.style.color = "var(--muted)";
+      tg.textContent = it.repeat === "daily" ? "매일" : "매주"; parts.push(tg); }
+    const ask = document.createElement("button"); ask.className = "mini-btn"; ask.type = "button"; ask.textContent = "묻기";
+    ask.title = "이 일에 대해 문서에게 묻기";
+    ask.addEventListener("click", () => { $("navAsk").click(); $("askInput").value = it.text; $("askInput").focus(); });
+    parts.push(ask);
+    if (!it.series){
+      const mv = document.createElement("button"); mv.className = "mini-btn"; mv.type = "button"; mv.textContent = "내일로";
+      mv.addEventListener("click", async () => {
+        const [yy, mo, dd] = logDay.split("-").map(Number);
+        const to = isoDay(new Date(yy, mo - 1, dd + 1));
+        const r = await api("/api/worklog/move", {date: logDay, id: it.id, to}); renderTodos(r.items); loadCalendar(); });
+      parts.push(mv);
+    }
     const del = document.createElement("button"); del.className = "mini-btn"; del.type = "button"; del.textContent = "삭제";
+    if (it.series) del.title = "반복 일정 전체를 지웁니다";
     del.addEventListener("click", async () => {
       const r = await api("/api/worklog/delete", {date: logDay, id: it.id}); renderTodos(r.items); loadCalendar(); });
-    row.append(cb, tx, mv, del); box.appendChild(row);
+    parts.push(del);
+    row.append(...parts); box.appendChild(row);
   });
 }
 async function loadDay(){
@@ -900,8 +955,9 @@ async function loadLog(){ await loadCalendar(); await loadDay(); }
 $("todoForm").addEventListener("submit", async e => {
   e.preventDefault();
   const text = $("todoInput").value.trim(); if (!text) return;
-  try{ const r = await api("/api/worklog/add", {date: logDay, text, time: $("todoTime").value});
-    $("todoInput").value = ""; $("todoTime").value = ""; renderTodos(r.items); loadCalendar(); }
+  try{ const r = await api("/api/worklog/add", {date: logDay, text, time: $("todoTime").value,
+      repeat: $("todoRepeat").value});
+    $("todoInput").value = ""; $("todoTime").value = ""; $("todoRepeat").value = ""; renderTodos(r.items); loadCalendar(); }
   catch(err){ showErr(err.message); }
 });
 function shiftMonth(n){ const [y, m] = calMonth.split("-").map(Number);
@@ -913,7 +969,7 @@ $("monToday").addEventListener("click", () => { logDay = isoDay(new Date()); cal
 
 // 문서 뷰어 (통독 + 문서 안에서 찾기)
 let viewerParas = [], viewerMarks = [], viewerIdx = -1;
-async function openViewer(name){
+async function openViewer(name, jumpIdx){
   const d = await api("/api/docs/preview?name=" + encodeURIComponent(name)).catch(() => null);
   if (!d) return;
   viewerParas = d.paras;
@@ -921,7 +977,10 @@ async function openViewer(name){
   $("viewerQuery").value = ""; $("viewerCount").textContent = "";
   paintViewer("");
   $("viewer").hidden = false;
-  $("viewerQuery").focus();
+  if (jumpIdx != null){
+    const el = $("viewerBody").children[jumpIdx];
+    if (el){ el.classList.add("jump"); setTimeout(() => el.scrollIntoView({block: "center"}), 40); }
+  } else $("viewerQuery").focus();
 }
 function paintViewer(q){
   const body = $("viewerBody"); body.textContent = ""; viewerMarks = []; viewerIdx = -1;
@@ -956,7 +1015,30 @@ $("viewerNext").addEventListener("click", () => stepMark(viewerIdx + 1));
 $("viewerPrev").addEventListener("click", () => stepMark(viewerIdx - 1));
 $("viewerClose").addEventListener("click", () => { $("viewer").hidden = true; });
 $("viewer").addEventListener("click", e => { if (e.target === $("viewer")) $("viewer").hidden = true; });
-document.addEventListener("keydown", e => { if (e.key === "Escape") $("viewer").hidden = true; });
+document.addEventListener("keydown", e => { if (e.key === "Escape"){ $("viewer").hidden = true; $("orgOverlay").hidden = true; } });
+$("printDay").addEventListener("click", () => printOnly([$("dayHead"), $("dayStats"), $("dayTodos")]));
+
+// 문서 정리본
+let orgText = "";
+async function openOrganize(name, btn){
+  btn.disabled = true;
+  $("orgTitle").textContent = "정리본 — " + name;
+  $("orgBody").innerHTML = '<p style="color:var(--muted)">정리본을 만드는 중입니다. 문서 길이에 따라 30초쯤 걸립니다…</p>';
+  $("orgNote").textContent = "";
+  $("orgOverlay").hidden = false;
+  try{
+    const r = await api("/api/organize", {name});
+    orgText = r.text;
+    $("orgBody").innerHTML = renderRich(r.text);
+    $("orgNote").textContent = (r.saved ? "정리본 폴더에 " + r.saved + "로 저장했습니다. " : "")
+      + (r.truncated ? "문서가 길어 앞부분 7,000자까지로 만들었습니다." : "문서에 있는 내용만으로 만들었습니다.");
+  }catch(e){ $("orgBody").innerHTML = ""; orgText = ""; $("orgNote").textContent = e.message; }
+  btn.disabled = false;
+}
+$("orgClose").addEventListener("click", () => { $("orgOverlay").hidden = true; });
+$("orgOverlay").addEventListener("click", e => { if (e.target === $("orgOverlay")) $("orgOverlay").hidden = true; });
+$("orgCopy").addEventListener("click", () => { if (orgText) navigator.clipboard.writeText(orgText); });
+$("orgPrint").addEventListener("click", () => printOnly([document.querySelector("#orgOverlay .viewer-box")]));
 
 refreshStatus(); renderRecent(); setInterval(refreshStatus, 20000);
 </script>

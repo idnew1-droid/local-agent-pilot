@@ -185,10 +185,12 @@ def load_worklog():
         with open(WORKLOG_FILE, encoding="utf-8") as f:
             d = json.load(f)
         if isinstance(d, dict) and "days" in d:
+            d.setdefault("recurring", [])
+            d.setdefault("rec_done", {})
             return d
     except (OSError, ValueError):
         pass
-    return {"seq": 0, "days": {}}
+    return {"seq": 0, "days": {}, "recurring": [], "rec_done": {}}
 
 
 def save_worklog(d):
@@ -202,6 +204,24 @@ def save_worklog(d):
 def sort_items(items):
     """시간이 있는 일을 시간순으로 앞에, 나머지는 추가한 순서를 지킨다."""
     return sorted(items, key=lambda it: (0, it["time"]) if it.get("time") else (1, ""))
+
+
+def day_items(wl, d):
+    """그 날짜의 할 일 = 날짜에 직접 붙은 일 + 그날에 해당하는 반복 일정의 합집합."""
+    items = [dict(it) for it in wl["days"].get(d, [])]
+    try:
+        y, m, dd = (int(x) for x in d.split("-"))
+        wd = datetime(y, m, dd).weekday()
+    except ValueError:
+        return sort_items(items)
+    for s in wl.get("recurring", []):
+        if d < s["start"]:
+            continue
+        if s["repeat"] == "daily" or (s["repeat"] == "weekly" and s["weekday"] == wd):
+            items.append({"id": "r" + str(s["id"]), "series": s["id"], "text": s["text"],
+                          "time": s.get("time", ""), "repeat": s["repeat"],
+                          "done": d in wl.get("rec_done", {}).get(str(s["id"]), [])})
+    return sort_items(items)
 
 
 # ---------- 의미 검색 색인 (임베딩, 백그라운드 구축) ----------
@@ -384,7 +404,7 @@ class Handler(BaseHTTPRequestHandler):
             d = parse_qs(urlparse(self.path).query).get("date", [""])[0] \
                 or datetime.now().date().isoformat()
             wl = load_worklog()
-            self.send_json({"date": d, "items": sort_items(wl["days"].get(d, [])),
+            self.send_json({"date": d, "items": day_items(wl, d),
                             "counts": log_counts(d)})
         elif self.path.startswith("/api/calendar"):
             from urllib.parse import urlparse, parse_qs
@@ -393,10 +413,14 @@ class Handler(BaseHTTPRequestHandler):
             counts = {d: c for d, c in log_all_counts().items() if d.startswith(month)}
             wl = load_worklog()
             todos = {}
-            for d, items in wl["days"].items():
-                if d.startswith(month) and items:
-                    todos[d] = {"total": len(items),
-                                "done": sum(1 for it in items if it["done"])}
+            import calendar as _cal
+            _y, _mo = (int(x) for x in month.split("-"))
+            for _dd in range(1, _cal.monthrange(_y, _mo)[1] + 1):
+                iso = f"{month}-{_dd:02d}"
+                merged = day_items(wl, iso)
+                if merged:
+                    todos[iso] = {"total": len(merged),
+                                  "done": sum(1 for it in merged if it["done"])}
             self.send_json({"month": month, "counts": counts, "todos": todos})
         elif self.path.startswith("/api/records"):
             from urllib.parse import urlparse, parse_qs
@@ -441,16 +465,42 @@ class Handler(BaseHTTPRequestHandler):
                 t = (data.get("time") or "").strip()
                 if t and not re.match(r"^\d{2}:\d{2}$", t):
                     t = ""
+                repeat = data.get("repeat") or ""
                 wl = load_worklog()
                 wl["seq"] += 1
+                if repeat in ("daily", "weekly"):
+                    y2, m2, d2 = (int(x) for x in d.split("-"))
+                    wl["recurring"].append({"id": wl["seq"], "text": text, "time": t,
+                                            "repeat": repeat, "start": d,
+                                            "weekday": datetime(y2, m2, d2).weekday()})
+                    save_worklog(wl)
+                    self.send_json({"items": day_items(wl, d)})
+                    return
                 item = {"id": wl["seq"], "text": text, "done": False, "time": t}
                 wl["days"].setdefault(d, []).append(item)
                 save_worklog(wl)
-                self.send_json({"item": item, "items": sort_items(wl["days"][d])})
+                self.send_json({"item": item, "items": day_items(wl, d)})
             elif self.path in ("/api/worklog/toggle", "/api/worklog/delete",
                                "/api/worklog/move"):
                 d = data.get("date") or datetime.now().date().isoformat()
                 wl = load_worklog()
+                iid = data.get("id")
+                if isinstance(iid, str) and iid.startswith("r"):
+                    sid = iid[1:]
+                    if self.path.endswith("toggle"):
+                        done_list = wl["rec_done"].setdefault(sid, [])
+                        if d in done_list:
+                            done_list.remove(d)
+                        else:
+                            done_list.append(d)
+                    elif self.path.endswith("delete"):
+                        wl["recurring"] = [s for s in wl["recurring"]
+                                           if str(s["id"]) != sid]
+                        wl["rec_done"].pop(sid, None)
+                    # 반복 일정은 날짜 이동(미루기)을 적용하지 않는다
+                    save_worklog(wl)
+                    self.send_json({"items": day_items(wl, d)})
+                    return
                 items = wl["days"].get(d, [])
                 if self.path.endswith("toggle"):
                     for it in items:
@@ -466,7 +516,9 @@ class Handler(BaseHTTPRequestHandler):
                         wl["days"][d] = [it for it in items if it["id"] != data.get("id")]
                         wl["days"].setdefault(to, []).extend(moving)
                 save_worklog(wl)
-                self.send_json({"items": sort_items(wl["days"].get(d, []))})
+                self.send_json({"items": day_items(wl, d)})
+            elif self.path == "/api/organize":
+                self.handle_organize(data)
             elif self.path == "/api/summarize":
                 self.handle_summarize(data)
             elif self.path == "/api/docs/upload":
@@ -513,7 +565,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         meta.update({"found": True,
                      "sources": sorted({h["source"] for h in hits}),
-                     "evidence": [h["text"] for h in hits]})
+                     "evidence": [{"source": h["source"], "idx": h["idx"],
+                                   "text": h["text"]} for h in hits]})
         emit(meta)
         context = "\n\n".join(f"[근거:{h['source']}] {h['text']}" for h in hits)
         msgs = [
@@ -539,6 +592,46 @@ class Handler(BaseHTTPRequestHandler):
             emit({"type": "done", "elapsed_s": round(time.time() - started, 1)})
         except RuntimeError as e:
             emit({"type": "error", "message": str(e)})
+
+    def handle_organize(self, data):
+        """업무 문서(매뉴얼)를 창구에서 바로 찾아 쓰기 좋은 정리본으로 재구성한다."""
+        name = os.path.basename(data.get("name") or "")
+        if not name.endswith((".txt", ".md")):
+            self.send_json({"error": "정리본을 만들 문서가 아닙니다."}, 400)
+            return
+        path = os.path.join(agent.DOCS_DIR, name)
+        if not os.path.isfile(path):
+            self.send_json({"error": "문서를 찾을 수 없습니다."}, 404)
+            return
+        with open(path, encoding="utf-8", errors="replace") as f:
+            full = f.read()
+        truncated = len(full) > 7000
+        system = ("너는 창구 업무 문서를 정리하는 도우미다. 주어진 문서를 창구에서 바로 찾아 쓰기 좋은 "
+                  "정리본으로 재구성한다. 문서에 없는 내용은 절대 쓰지 않는다. 한국어로 쓴다.")
+        guide = ("다음 구성으로 정리본을 만들어라. 해당 내용이 문서에 없으면 그 항목은 빼라.\n"
+                 "## 한눈에\n(한두 문장 개요)\n"
+                 "## 핵심만\n(꼭 알아야 할 것, 목록)\n"
+                 "## 절차\n(순서가 있는 일이면 번호 목록)\n"
+                 "## 주의·금지\n(하면 안 되는 것, 확인 사항)\n"
+                 "## 헷갈리는 용어\n(용어 = 쉬운 뜻)\n\n문서:\n") + full[:7000]
+        msgs = [{"role": "system", "content": system}, {"role": "user", "content": guide}]
+        if external_active():
+            text = external_chat(msgs)
+        else:
+            with STATE["chat_lock"]:
+                use_model(STATE["qa_model"])
+                text = agent.chat(msgs)
+        out_dir = os.path.join(BASE_DIR, "정리본")
+        os.makedirs(out_dir, exist_ok=True)
+        out_name = os.path.splitext(name)[0] + "_정리본.md"
+        try:
+            with open(os.path.join(out_dir, out_name), "w", encoding="utf-8") as f:
+                f.write("# " + out_name + "\n\n" + text)
+        except OSError:
+            out_name = ""
+        append_log({"type": "organize"})
+        self.send_json({"name": name, "text": text, "saved": out_name,
+                        "truncated": truncated})
 
     def handle_summarize(self, data):
         masked, found = agent.mask_text(data.get("text", ""), SETTINGS["mask_level"])
