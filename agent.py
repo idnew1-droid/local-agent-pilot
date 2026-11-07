@@ -125,9 +125,9 @@ def retrieve(chunks, query, topk=3):
 
 # ---------------- 의미 검색 (임베딩, 선택 기능) ----------------
 EMBED_MODEL = os.environ.get("LOCAL_AGENT_EMBED_MODEL", "bge-m3")
-# 실측으로 정한다: 문서 내 질문의 최소 점수와 문서 밖 질문의 최대 점수 사이.
-# (PC 실측 2026-11-07에서 확정 — measure_embed.py)
-EMBED_THRESHOLD = 0.50
+# 실측 근거 (PC, bge-m3, 2026-11-07): 문서 내 질문 최소 0.533 / 문서 밖 질문 최대 0.419.
+# 그 사이에서 정밀도 쪽으로 잡았다 (문서 밖 질문을 근거로 오인하면 환각 방지 장치가 무너진다).
+EMBED_THRESHOLD = 0.48
 
 
 def embed(texts):
