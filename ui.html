@@ -146,6 +146,10 @@
   .result-head .fig b{font-size:17px;color:var(--hue);font-weight:600}
   .result-head .fig b.grey{color:var(--muted)}
   .masked-text{white-space:pre-wrap;line-height:1.9;word-break:keep-all}
+  .cmp.on{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .cmp-pane{min-width:0}
+  .cmp-label{font-size:12px;color:var(--muted);margin:0 0 5px}
+  .cmp .orig{line-height:1.9}
   .redact{display:inline-block;background:var(--accent);color:#fff;font-size:11.5px;font-weight:500;
     border-radius:3px;padding:1px 7px;margin:0 1px;vertical-align:1px;letter-spacing:.01em}
   .counts{display:flex;gap:16px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--rule);
@@ -389,8 +393,18 @@
       <div class="panel result" id="maskResult" hidden>
         <div class="result-head"><h3>가려진 메모</h3>
           <span class="fig">총 <b class="num" id="maskTotal">0</b>건 가림</span>
+          <button class="mini-btn" id="cmpBtn" type="button" aria-pressed="false">원본 나란히</button>
           <button class="mini-btn" id="copyMask" type="button">복사</button></div>
-        <div class="masked-text" id="maskBox"></div>
+        <div class="cmp" id="cmpWrap">
+          <div class="cmp-pane" id="origPane" hidden>
+            <p class="cmp-label">원본 — 확인용으로 이 화면에서만 표시하고, 저장하지 않습니다</p>
+            <div class="masked-text orig" id="origBox"></div>
+          </div>
+          <div class="cmp-pane">
+            <p class="cmp-label" id="maskedLabel" hidden>가려진 메모 — 복사해서 쓰는 쪽</p>
+            <div class="masked-text" id="maskBox"></div>
+          </div>
+        </div>
         <div class="counts" id="maskCounts"></div>
       </div>
 
@@ -843,9 +857,10 @@ function renderMasked(text){
   h = h.replace(/([가-힣])\*{1,3}/g, '<span class="redact">$1**</span>');
   return h;
 }
-let lastMasked = "", lastSummary = "";
+let lastMasked = "", lastSummary = "", lastOriginal = "";
 async function runMemo(summarize){
   const text = $("memoInput").value;
+  lastOriginal = text;
   if (!text.trim()){ showErr("메모를 먼저 입력해 주세요."); return; }
   hideErr();
   const btn = summarize ? $("sumBtn") : $("maskBtn"); btn.disabled = true;
@@ -869,6 +884,14 @@ async function runMemo(summarize){
 $("maskBtn").addEventListener("click", () => runMemo(false));
 $("sumBtn").addEventListener("click", () => runMemo(true));
 $("copyMask").addEventListener("click", () => navigator.clipboard.writeText(lastMasked));
+$("cmpBtn").addEventListener("click", () => {
+  const on = $("origPane").hidden;
+  $("origPane").hidden = !on;
+  $("maskedLabel").hidden = !on;
+  $("cmpWrap").classList.toggle("on", on);
+  $("cmpBtn").setAttribute("aria-pressed", on ? "true" : "false");
+  if (on) $("origBox").textContent = lastOriginal || $("memoInput").value;
+});
 $("copySum").addEventListener("click", () => navigator.clipboard.writeText(lastSummary));
 
 // 설정 — 모델 설명
