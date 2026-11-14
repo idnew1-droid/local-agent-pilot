@@ -49,6 +49,11 @@ PATTERNS = [
     ("이메일", re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.]+\b")),
 ]
 LABEL_NAME = re.compile(r"(성명|이름|고객명|예금주)\s*[:：]\s*([가-힣]{2,4})")
+# 호칭 앞 이름: "박지민고객", "김민수 님"처럼 라벨 없이 호칭에 붙은 이름 (2026-11-14 실사용 테스트에서 누락 확인)
+HONOR_NAME = re.compile(r"([가-힣]{2,4})(\s*)(?=고객님|고객|님|씨)")
+NAME_EXCLUDE = {"신규", "우수", "방문", "일반", "단체", "법인", "개인", "잠재", "기존", "해당",
+                "모든", "단골", "장기", "유치", "사장", "선생", "대표", "고객", "회장", "원장",
+                "교수", "박사", "팀장", "과장", "부장", "차장", "대리", "주임", "선임", "책임", "담당"}
 
 
 def _partial(label, hit):
@@ -77,6 +82,14 @@ def mask_text(text, level="full"):
     for m in LABEL_NAME.finditer(text):
         name = m.group(2)
         out = out.replace(name, name[0] + "*" * (len(name) - 1))
+
+    def _honor(m):
+        name = m.group(1)
+        if name in NAME_EXCLUDE:
+            return m.group(0)
+        found.append(("성명", name))
+        return name[0] + "*" * (len(name) - 1) + m.group(2)
+    out = HONOR_NAME.sub(_honor, out)
     for label, pat in PATTERNS:
         for hit in pat.findall(out):
             found.append((label, hit))

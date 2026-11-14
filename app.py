@@ -206,6 +206,102 @@ def sort_items(items):
     return sorted(items, key=lambda it: (0, it["time"]) if it.get("time") else (1, ""))
 
 
+# ---------- 메모장 (원본 메모 보관) ----------
+# 원본은 자동 로그에 남기지 않는다. 본인이 저장 버튼을 눌렀을 때만 이 폴더에 파일로 남는다.
+# 저장 위치는 고정: 프로그램 폴더 아래 "메모장". 파일 하나가 메모 하나 (메모장 프로그램으로 바로 열림).
+MEMO_DIR = os.path.join(BASE_DIR, "메모장")
+_MEMO_NAME = re.compile(r"^메모_\d{8}_\d{6}(_\d+)?\.txt$")
+_SEC_ORIG = "===== 원본 메모 ====="
+_SEC_MASK = "===== 가려진 메모 ====="
+_SEC_SUM = "===== 요약 ====="
+
+
+def save_memo(original, masked, summary):
+    original = (original or "").strip()
+    if not original:
+        return None
+    os.makedirs(MEMO_DIR, exist_ok=True)
+    now = datetime.now()
+    name = now.strftime("메모_%Y%m%d_%H%M%S.txt")
+    path = os.path.join(MEMO_DIR, name)
+    n = 1
+    while os.path.exists(path):
+        n += 1
+        name = now.strftime("메모_%Y%m%d_%H%M%S") + f"_{n}.txt"
+        path = os.path.join(MEMO_DIR, name)
+    parts = [f"저장 시각: {now.strftime('%Y-%m-%d %H:%M:%S')}", "", _SEC_ORIG, original]
+    if masked:
+        parts += ["", _SEC_MASK, masked]
+    if summary:
+        parts += ["", _SEC_SUM, summary]
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(parts) + "\n")
+    return name
+
+
+def _parse_memo(raw):
+    out = {"original": "", "masked": "", "summary": ""}
+    cur = None
+    buf = {k: [] for k in out}
+    for line in raw.splitlines():
+        s = line.strip()
+        if s == _SEC_ORIG:
+            cur = "original"
+        elif s == _SEC_MASK:
+            cur = "masked"
+        elif s == _SEC_SUM:
+            cur = "summary"
+        elif cur:
+            buf[cur].append(line)
+    for k in out:
+        out[k] = "\n".join(buf[k]).strip()
+    if not out["original"] and not out["masked"]:
+        out["original"] = raw.strip()  # 구분선이 없는 파일은 통째로 원본으로
+    return out
+
+
+def list_memos():
+    try:
+        names = sorted((n for n in os.listdir(MEMO_DIR) if _MEMO_NAME.match(n)),
+                       reverse=True)
+    except OSError:
+        return []
+    out = []
+    for n in names:
+        try:
+            with open(os.path.join(MEMO_DIR, n), encoding="utf-8") as f:
+                got = _parse_memo(f.read())
+            first = next((ln.strip() for ln in got["original"].splitlines()
+                          if ln.strip()), "")
+            stamp = f"{n[3:7]}-{n[7:9]}-{n[9:11]} {n[12:14]}:{n[14:16]}"
+            out.append({"name": n, "saved_at": stamp, "preview": first[:46]})
+        except OSError:
+            continue
+    return out
+
+
+def read_memo(name):
+    if not _MEMO_NAME.match(name or ""):
+        return None
+    try:
+        with open(os.path.join(MEMO_DIR, name), encoding="utf-8") as f:
+            got = _parse_memo(f.read())
+    except OSError:
+        return None
+    got["name"] = name
+    return got
+
+
+def delete_memo(name):
+    if not _MEMO_NAME.match(name or ""):
+        return False
+    try:
+        os.remove(os.path.join(MEMO_DIR, name))
+        return True
+    except OSError:
+        return False
+
+
 def day_items(wl, d):
     """그 날짜의 할 일 = 날짜에 직접 붙은 일 + 그날에 해당하는 반복 일정의 합집합."""
     items = [dict(it) for it in wl["days"].get(d, [])]
@@ -442,9 +538,14 @@ def chat_stream(messages):
 
 
 def summarize(masked_text):
+    # 짧은 메모에 세 줄을 강제하면 없는 내용을 채우는 환각이 생긴다 (2026-11-14 실사용 테스트)
+    if len(masked_text) < 120:
+        ask = "다음 상담 메모를 한두 문장으로 짧게 요약해 주세요. 메모에 없는 내용은 덧붙이지 마세요."
+    else:
+        ask = "다음 상담 메모를 세 줄로 요약해 주세요. 메모에 없는 내용은 덧붙이지 마세요."
     msgs = [
-        {"role": "system", "content": "당신은 창구 상담 메모를 정리하는 비서입니다. 마스킹된 기호는 그대로 두세요."},
-        {"role": "user", "content": f"다음 상담 메모를 세 줄로 요약해 주세요.\n\n{masked_text}"},
+        {"role": "system", "content": "당신은 창구 상담 메모를 정리하는 비서입니다. 이미 가려진 표기는 그대로 두고, 별표 같은 표기를 새로 만들지 마세요."},
+        {"role": "user", "content": f"{ask}\n\n{masked_text}"},
     ]
     if external_active():
         return external_chat(msgs)
@@ -548,6 +649,16 @@ class Handler(BaseHTTPRequestHandler):
                     todos[iso] = {"total": len(merged),
                                   "done": sum(1 for it in merged if it["done"])}
             self.send_json({"month": month, "counts": counts, "todos": todos})
+        elif self.path.startswith("/api/memos/one"):
+            from urllib.parse import urlparse, parse_qs, unquote
+            name = unquote(parse_qs(urlparse(self.path).query).get("name", [""])[0])
+            got = read_memo(name)
+            if got is None:
+                self.send_json({"error": "메모를 찾을 수 없습니다."}, 404)
+            else:
+                self.send_json(got)
+        elif self.path == "/api/memos":
+            self.send_json({"dir": MEMO_DIR, "memos": list_memos()})
         elif self.path.startswith("/api/records"):
             from urllib.parse import urlparse, parse_qs
             from datetime import timedelta
@@ -649,6 +760,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.handle_slides(data)
             elif self.path == "/api/summarize":
                 self.handle_summarize(data)
+            elif self.path == "/api/memos/save":
+                name = save_memo(data.get("text") or "", data.get("masked") or "",
+                                 data.get("summary") or "")
+                if name is None:
+                    self.send_json({"error": "메모 내용이 비어 있습니다."}, 400)
+                else:
+                    self.send_json({"ok": True, "name": name, "dir": MEMO_DIR})
+            elif self.path == "/api/memos/delete":
+                if delete_memo(data.get("name") or ""):
+                    self.send_json({"ok": True})
+                else:
+                    self.send_json({"error": "메모를 찾을 수 없습니다."}, 404)
             elif self.path == "/api/docs/upload":
                 self.handle_upload(data)
             elif self.path == "/api/model":
