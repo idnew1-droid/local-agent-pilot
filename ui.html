@@ -50,11 +50,12 @@
   .nav-item[aria-selected="true"] svg{stroke:var(--text)}
 
   .group-label{font-size:12.5px;color:var(--muted);margin:0 4px 8px}
-  .doc-row{width:100%;display:flex;justify-content:space-between;align-items:baseline;gap:8px;
+  .doc-row{width:100%;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:2px 8px;
     background:none;border:0;padding:6px 8px;border-radius:var(--radius-control);cursor:pointer;text-align:left}
   .doc-row:hover{background:#e9edf1}
-  .doc-row .nm{font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .doc-row .nm{flex:1;min-width:0;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .doc-row .ct{font-size:12px;color:var(--muted);flex:none}
+  .doc-row .acts{display:flex;gap:4px;flex-basis:100%;justify-content:flex-end}
   .doc-preview{display:none;padding:4px 8px 10px}
   .doc-preview.open{display:block}
   .doc-preview p{font-size:12.5px;color:var(--muted);background:var(--surface);border:1px solid var(--rule);
@@ -100,7 +101,7 @@
   .a-foot{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:11px;font-size:12.5px;color:var(--muted)}
   .a-foot .src{color:var(--hue);font-weight:500}
   .a-foot .spacer{flex:1}
-  .mini-btn{background:none;border:0;cursor:pointer;color:var(--muted);font-size:12.5px;padding:3px 7px;border-radius:var(--radius-control)}
+  .mini-btn{background:none;border:0;cursor:pointer;color:var(--muted);font-size:12.5px;padding:3px 7px;border-radius:var(--radius-control);white-space:nowrap;flex:none}
   .mini-btn:hover{background:var(--raised);color:var(--text)}
   .masked-note{font-size:12.5px;color:var(--muted);margin-top:9px}
   .masked-note b{color:var(--hue);font-weight:600}
@@ -666,7 +667,8 @@ async function renderDocs(){
     const sl = document.createElement("button"); sl.className = "mini-btn"; sl.type = "button"; sl.textContent = "발표";
     sl.title = "이 문서로 발표자료 만들기";
     sl.addEventListener("click", () => openSlides(d.name, sl));
-    row.append(nm, ct, og, sl);
+    const acts = document.createElement("span"); acts.className = "acts"; acts.append(og, sl);
+    row.append(nm, ct, acts);
     list.appendChild(row);
   });
   if (!dl.docs.length) list.innerHTML = '<p class="hint" style="font-size:12.5px;color:var(--muted);padding:0 8px">아직 문서가 없습니다.</p>';
@@ -821,10 +823,10 @@ function renderRich(text){
     const line = raw.trimEnd();
     const mH = line.match(/^#{2,3}\s+(.*)$/);
     const mUl = line.match(/^\s*[-•·]\s+(.*)$/);
-    const mOl = line.match(/^\s*\d+[.)]\s+(.*)$/);
+    const mOl = line.match(/^\s*(\d+)[.)]\s+(.*)$/);
     if (mH){ closeList(); html += "<h4>" + inline(mH[1]) + "</h4>"; }
     else if (mUl){ if (list !== "ul"){ closeList(); html += "<ul>"; list = "ul"; } html += "<li>" + inline(mUl[1]) + "</li>"; }
-    else if (mOl){ if (list !== "ol"){ closeList(); html += "<ol>"; list = "ol"; } html += "<li>" + inline(mOl[1]) + "</li>"; }
+    else if (mOl){ if (list !== "ol"){ closeList(); const st = parseInt(mOl[1], 10); html += st > 1 ? '<ol start="' + st + '">' : "<ol>"; list = "ol"; } html += "<li>" + inline(mOl[2]) + "</li>"; }
     else if (!line.trim()){ closeList(); }
     else { closeList(); html += "<p>" + inline(line.trim()) + "</p>"; }
   }
@@ -1175,7 +1177,7 @@ async function openSlides(name, btn){
         + (j.total > 1 ? " — 조각 " + Math.min(j.step, j.total) + "/" + j.total + " 단계" : "") + "…</p>";
     });
     slideData = r.slides; slideIdx = 0; paintSlide();
-    $("slideNote").textContent = "문서에 있는 내용만으로 만들었습니다. 방향키로도 넘길 수 있습니다.";
+    $("slideNote").textContent = "문서에 있는 내용만으로 만들었습니다. 신규 직원 교육이나 창구 게시용 안내처럼, 긴 문서를 장 단위로 순서대로 넘겨 보는 용도에 씁니다. 방향키로도 넘길 수 있습니다.";
   }catch(e){ $("slideStage").innerHTML = ""; $("slideNote").textContent = e.message; }
   btn.disabled = false;
 }
